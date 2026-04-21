@@ -12,6 +12,7 @@ import { getSession, saveSession, resetSession, mergeProfile, appendHistory } fr
 import { buildResponse } from '../modules/response.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
 import { reloadKnowledge } from '../modules/knowledge.js';
+import { selfCorrectAnswer } from '../modules/llm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FEEDBACK_LOG = path.resolve(__dirname, '..', '..', 'logs', 'feedback.jsonl');
@@ -98,18 +99,44 @@ async function handleIncoming(msg) {
     return;
   }
 
-  // /t — javab-e tekrari (repeat)
-  if (/^\/t\b/i.test(userText) || /^\/repeat\b/i.test(userText)) {
+  // /check /c /t /wrong — re-analyze khod-kar + generate javab-e jadid
+  if (/^\/check\b/i.test(userText) || /^\/c\b/i.test(userText) || /^\/t\b/i.test(userText) || /^\/repeat\b/i.test(userText) || /^\/wrong\b/i.test(userText) || /^\/ghalat\b/i.test(userText) || /^\/eshtebah\b/i.test(userText) || /^\/bug\b/i.test(userText) || /^\/error\b/i.test(userText)) {
     const s = await getSession(sessionId);
     const lastAssistant = [...(s.history || [])].reverse().find((h) => h.role === 'assistant');
     const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
+    if (!lastUser?.text || !lastAssistant?.text) {
+      await sendMessage(chatId, 'Hanuz hichi nis. Aval ye chizi beporsid.', { threadId });
+      return;
+    }
     recordFeedback({
-      ts: new Date().toISOString(), tag: 'repeat',
+      ts: new Date().toISOString(), tag: 'flagged_wrong',
       chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
-      user_query: lastUser?.text || null, bot_reply: lastAssistant?.text || null,
+      user_query: lastUser.text, bot_reply: lastAssistant.text,
       profile: s.profile || {}, last_products: (s.last_products || []).map((p) => ({ title: p.title, sku: p.sku })),
     });
-    await sendMessage(chatId, '🔁 Noted — javab-e tekrari. Man fix mikonam.', { threadId });
+    await sendChatAction(chatId, 'typing', { threadId });
+    try {
+      const corrected = await selfCorrectAnswer({
+        userMessage: lastUser.text,
+        previousReply: lastAssistant.text,
+        profile: s.profile || {},
+        products: s.last_products || [],
+        language: s.language || 'en',
+        history: s.history || [],
+        lastProducts: s.last_products || [],
+      });
+      s.pending_teach = {
+        question: lastUser.text,
+        answer: corrected,
+        ts: new Date().toISOString(),
+        auto_generated: true,
+      };
+      await saveSession(sessionId, s);
+      await sendMessage(chatId, corrected + '\n\n— — —\nAge in javab dorost ast, /ok bezan ta hamishe save beshe. Age hanuz ghalat ast, /t dobare bezan.', { threadId });
+    } catch (err) {
+      logger.error({ err }, 'self-correct failed');
+      await sendMessage(chatId, '📝 Flag gerefit vali nemitounam khodam correct-esh konam alan. Log save shod baraye barresi.', { threadId });
+    }
     return;
   }
 
@@ -189,23 +216,6 @@ async function handleIncoming(msg) {
     return;
   }
 
-  // feedback (wrong/ghalat/...) — alias kept for flexibility
-  const feedbackMatch = userText.match(/^\/(wrong|bad|fix|error|bug|ghalat|fixit|eshtebah)\b\s*(.*)$/i);
-  if (feedbackMatch) {
-    const note = (feedbackMatch[2] || '').trim();
-    const s = await getSession(sessionId);
-    const lastAssistant = [...(s.history || [])].reverse().find((h) => h.role === 'assistant');
-    const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
-    recordFeedback({
-      ts: new Date().toISOString(), tag: 'wrong',
-      chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
-      user_query: lastUser?.text || null, bot_reply: lastAssistant?.text || null,
-      note: note || null,
-      profile: s.profile || {}, last_products: (s.last_products || []).map((p) => ({ title: p.title, sku: p.sku })),
-    });
-    await sendMessage(chatId, '📝 Noted — barresi mikonam va fix.', { threadId });
-    return;
-  }
 
   const session = await getSession(sessionId);
   if (session.muted) return;

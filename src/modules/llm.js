@@ -276,6 +276,47 @@ function stripFormatting(text) {
   return s.trim();
 }
 
+export async function selfCorrectAnswer({ userMessage, previousReply, profile, products, language, history, lastProducts }) {
+  const correctionNotice = `
+=== CORRECTION MODE — IMPORTANT ===
+Your previous reply below was flagged as WRONG by the store owner.
+
+ORIGINAL CUSTOMER QUESTION:
+${userMessage}
+
+YOUR PREVIOUS (WRONG) REPLY:
+${previousReply}
+
+NOW RE-ANALYZE:
+1. Check APPLE PRODUCT SPECS, APPLE CURRENT LINEUP, STORE POLICIES, PAYMENT METHODS, CUSTOM ANSWERS, and candidate_products very carefully.
+2. Figure out what was wrong (stale info, hallucinated spec, misread intent, outdated lineup, etc.).
+3. Produce the CORRECT answer, grounded in the knowledge files and current catalog.
+
+Respond in this format:
+• First line: "Fix — <1-line explanation of what was wrong>"
+• Next lines: the CORRECT answer (follow all normal tone/length/link-policy rules).
+• Keep it short: 3–6 lines total.`;
+  try {
+    const resp = await client.chat.completions.create({
+      model: config.OPENAI_MODEL,
+      max_tokens: 600,
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: systemPrompt(userMessage, language) + '\n\n' + correctionNotice },
+        { role: 'user',   content: buildUserPayload({ userMessage, profile, products: products || [], intent: 'correction', language, relaxed: [], history, lastProducts }) },
+      ],
+    });
+    let text = (resp.choices?.[0]?.message?.content || '').trim();
+    if (!text) throw new UpstreamError('Empty OpenAI correction response');
+    const prodCount = (products || []).length;
+    if (prodCount !== 1) text = stripLinks(text);
+    return stripFormatting(text);
+  } catch (err) {
+    logger.error({ err }, 'selfCorrectAnswer failed');
+    throw new UpstreamError('LLM self-correction failed', { cause: String(err?.message || err) });
+  }
+}
+
 export async function phraseAnswer({ userMessage, profile, products, intent, language, relaxed, history, lastProducts }) {
   try {
     const resp = await client.chat.completions.create({
