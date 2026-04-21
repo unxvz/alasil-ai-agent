@@ -31,7 +31,8 @@ app.use((req, res, next) => {
 });
 
 // Support URL_BASE_PATH for sub-URI deployments (e.g. cPanel Passenger at /agent)
-const BASE_PATH = (process.env.URL_BASE_PATH || process.env.PASSENGER_BASE_URI || '').replace(/\/$/, '');
+let BASE_PATH = (process.env.URL_BASE_PATH || process.env.PASSENGER_BASE_URI || '').trim().replace(/\/$/, '');
+if (BASE_PATH && !BASE_PATH.startsWith('/')) BASE_PATH = '/' + BASE_PATH;
 if (BASE_PATH) logger.info({ BASE_PATH }, 'URL_BASE_PATH set');
 
 const router = express.Router();
