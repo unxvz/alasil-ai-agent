@@ -11,6 +11,7 @@ import { extractEntities } from '../modules/entities.js';
 import { getSession, saveSession, resetSession, mergeProfile, appendHistory } from '../modules/context.js';
 import { buildResponse } from '../modules/response.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
+import { reloadKnowledge } from '../modules/knowledge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FEEDBACK_LOG = path.resolve(__dirname, '..', '..', 'logs', 'feedback.jsonl');
@@ -97,6 +98,98 @@ async function handleIncoming(msg) {
     return;
   }
 
+  // /t — javab-e tekrari (repeat)
+  if (/^\/t\b/i.test(userText) || /^\/repeat\b/i.test(userText)) {
+    const s = await getSession(sessionId);
+    const lastAssistant = [...(s.history || [])].reverse().find((h) => h.role === 'assistant');
+    const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
+    recordFeedback({
+      ts: new Date().toISOString(), tag: 'repeat',
+      chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
+      user_query: lastUser?.text || null, bot_reply: lastAssistant?.text || null,
+      profile: s.profile || {}, last_products: (s.last_products || []).map((p) => ({ title: p.title, sku: p.sku })),
+    });
+    await sendMessage(chatId, '🔁 Noted — javab-e tekrari. Man fix mikonam.', { threadId });
+    return;
+  }
+
+  // /b <correct answer> — teach (bot-e javab-e dorost-e tu ra az alan estefade mikoneh)
+  const teachMatch = userText.match(/^\/b\b\s*(.*)$/i) || userText.match(/^\/teach\b\s*(.*)$/i);
+  if (teachMatch) {
+    const correct = (teachMatch[1] || '').trim();
+    if (!correct) {
+      await sendMessage(chatId, 'Chi javab dorost-e? Masalan: `/b iPhone Air has MagSafe 20W`', { threadId });
+      return;
+    }
+    const s = await getSession(sessionId);
+    const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
+    s.pending_teach = {
+      question: lastUser?.text || '(no previous query)',
+      answer: correct,
+      ts: new Date().toISOString(),
+    };
+    await saveSession(sessionId, s);
+    recordFeedback({
+      ts: new Date().toISOString(), tag: 'teach_pending',
+      chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
+      user_query: lastUser?.text || null, teach_answer: correct,
+    });
+    await sendMessage(chatId, `✏️ Teach pending:\n\nQ: ${s.pending_teach.question}\nA: ${correct}\n\nBa /ok tayid kon → knowledge base permanent save mishe.`, { threadId });
+    return;
+  }
+
+  // /ok — confirm pending teach → permanent save
+  if (/^\/ok\b/i.test(userText) || /^\/confirm\b/i.test(userText) || /^\/save\b/i.test(userText)) {
+    const s = await getSession(sessionId);
+    const pt = s.pending_teach;
+    if (!pt) {
+      await sendMessage(chatId, 'Hichi baraye save nist. Aval ba /b <javab-e dorost> teach kon.', { threadId });
+      return;
+    }
+    try {
+      const cfgPath = path.resolve(__dirname, '..', '..', 'config', 'custom_answers.md');
+      const block = `\n\n### Q: ${pt.question}\n### A: ${pt.answer}\n<!-- taught ${pt.ts} via /b /ok -->\n`;
+      fs.appendFileSync(cfgPath, block);
+      reloadKnowledge();
+      recordFeedback({
+        ts: new Date().toISOString(), tag: 'teach_confirmed',
+        chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
+        user_query: pt.question, teach_answer: pt.answer,
+      });
+      s.pending_teach = null;
+      await saveSession(sessionId, s);
+      await sendMessage(chatId, `✅ Saved permanently to knowledge base.\n\n"${pt.question}" → "${pt.answer.slice(0, 120)}${pt.answer.length > 120 ? '…' : ''}"\n\nHar moshtari dige hamin ra beporse, hamoon javab mide.`, { threadId });
+    } catch (err) {
+      logger.error({ err }, 'teach save failed');
+      await sendMessage(chatId, '❌ Save failed — ' + String(err?.message || err).slice(0, 200), { threadId });
+    }
+    return;
+  }
+
+  // /s — re-run last query with fresh references (refresh catalog + knowledge)
+  if (/^\/s\b/i.test(userText) || /^\/search\b/i.test(userText)) {
+    const s = await getSession(sessionId);
+    const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
+    if (!lastUser?.text) {
+      await sendMessage(chatId, 'Hichi gabli nis — aval ye chizi beporsid, ba\'d /s bezanid.', { threadId });
+      return;
+    }
+    try {
+      const { refreshCatalog } = await import('../modules/catalog.js');
+      reloadKnowledge();
+      await refreshCatalog();
+      await sendMessage(chatId, `🔄 Refreshed catalog + knowledge. Dobare check konam ba "${lastUser.text.slice(0, 80)}"...`, { threadId });
+      // Re-run the last query as if user sent it fresh
+      const fakeMsg = { ...msg, text: lastUser.text, message_id: msg.message_id + 1 };
+      await handleIncoming(fakeMsg);
+    } catch (err) {
+      logger.error({ err }, 's command failed');
+      await sendMessage(chatId, '❌ Refresh failed — ' + String(err?.message || err).slice(0, 200), { threadId });
+    }
+    return;
+  }
+
+  // feedback (wrong/ghalat/...) — alias kept for flexibility
   const feedbackMatch = userText.match(/^\/(wrong|bad|fix|error|bug|ghalat|fixit|eshtebah)\b\s*(.*)$/i);
   if (feedbackMatch) {
     const note = (feedbackMatch[2] || '').trim();
@@ -104,19 +197,13 @@ async function handleIncoming(msg) {
     const lastAssistant = [...(s.history || [])].reverse().find((h) => h.role === 'assistant');
     const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
     recordFeedback({
-      ts: new Date().toISOString(),
-      chatId,
-      sessionId,
-      from: msg.from?.username || msg.from?.first_name || msg.from?.id,
-      user_query: lastUser?.text || null,
-      bot_reply: lastAssistant?.text || null,
+      ts: new Date().toISOString(), tag: 'wrong',
+      chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
+      user_query: lastUser?.text || null, bot_reply: lastAssistant?.text || null,
       note: note || null,
-      profile: s.profile || {},
-      last_products: (s.last_products || []).map((p) => ({ title: p.title, sku: p.sku })),
-      intent: s.intent || null,
-      language: s.language || null,
+      profile: s.profile || {}, last_products: (s.last_products || []).map((p) => ({ title: p.title, sku: p.sku })),
     });
-    await sendMessage(chatId, '📝 Noted — mishnasam. Man oon javab ro barresi mikonam va fix. Thanks!', { threadId });
+    await sendMessage(chatId, '📝 Noted — barresi mikonam va fix.', { threadId });
     return;
   }
 
