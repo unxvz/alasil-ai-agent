@@ -194,17 +194,32 @@ async function handleIncoming(msg) {
     return;
   }
 
-  // /ok — confirm pending teach → permanent save
-  if (/^\/ok\b/i.test(userText) || /^\/confirm\b/i.test(userText) || /^\/save\b/i.test(userText)) {
+  // /ok — step 1: preview + ask for /yes to confirm actual save
+  if (/^\/ok\b/i.test(userText) || /^\/confirm\b/i.test(userText)) {
     const s = await getSession(sessionId);
     const pt = s.pending_teach;
     if (!pt) {
-      await sendMessage(chatId, 'Hichi baraye save nist. Aval ba /b <javab-e dorost> teach kon.', { threadId });
+      await sendMessage(chatId, 'Hichi baraye save nist. Aval ba /check ya /b <javab-e dorost> teach kon.', { threadId });
+      return;
+    }
+    s.pending_save_confirm = true;
+    await saveSession(sessionId, s);
+    const preview = `⚠️ Confirm SAVE permanent?\n\n━━━━━━━━━━━━━━━\nQ: ${pt.question}\nA: ${pt.answer}\n━━━━━━━━━━━━━━━\n\nIn ra har moshtari ra to ayande beporse, hamin javab mire. **Hamishe.**\n\n✅ /yes — save permanent\n❌ /cancel — paak kon, save nakon`;
+    await sendMessage(chatId, preview, { threadId });
+    return;
+  }
+
+  // /yes — actual save after /ok preview
+  if (/^\/yes\b/i.test(userText) || /^\/save\b/i.test(userText)) {
+    const s = await getSession(sessionId);
+    const pt = s.pending_teach;
+    if (!pt || !s.pending_save_confirm) {
+      await sendMessage(chatId, 'Hichi baraye confirm nist. Aval /check ya /b kon, ba`d /ok, ba`d /yes.', { threadId });
       return;
     }
     try {
       const cfgPath = path.resolve(__dirname, '..', '..', 'config', 'custom_answers.md');
-      const block = `\n\n### Q: ${pt.question}\n### A: ${pt.answer}\n<!-- taught ${pt.ts} via /b /ok -->\n`;
+      const block = `\n\n### Q: ${pt.question}\n### A: ${pt.answer}\n<!-- taught ${pt.ts} via /ok /yes -->\n`;
       fs.appendFileSync(cfgPath, block);
       reloadKnowledge();
       recordFeedback({
@@ -213,12 +228,27 @@ async function handleIncoming(msg) {
         user_query: pt.question, teach_answer: pt.answer,
       });
       s.pending_teach = null;
+      s.pending_save_confirm = false;
       await saveSession(sessionId, s);
       await sendMessage(chatId, `✅ Saved permanently to knowledge base.\n\n"${pt.question}" → "${pt.answer.slice(0, 120)}${pt.answer.length > 120 ? '…' : ''}"\n\nHar moshtari dige hamin ra beporse, hamoon javab mide.`, { threadId });
     } catch (err) {
       logger.error({ err }, 'teach save failed');
       await sendMessage(chatId, '❌ Save failed — ' + String(err?.message || err).slice(0, 200), { threadId });
     }
+    return;
+  }
+
+  // /cancel — discard pending teach
+  if (/^\/cancel\b/i.test(userText) || /^\/discard\b/i.test(userText)) {
+    const s = await getSession(sessionId);
+    if (!s.pending_teach) {
+      await sendMessage(chatId, 'Hichi baraye cancel nist.', { threadId });
+      return;
+    }
+    s.pending_teach = null;
+    s.pending_save_confirm = false;
+    await saveSession(sessionId, s);
+    await sendMessage(chatId, '❌ Cancelled — teach paak shod, hichi save nashod.', { threadId });
     return;
   }
 
