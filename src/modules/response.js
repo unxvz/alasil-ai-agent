@@ -3,6 +3,7 @@ import { nextClarification, isProfileComplete } from './clarification.js';
 import { retrieveProducts, retrieveForComparison, retrieveWithRelaxation } from './retrieval.js';
 import { phraseAnswer } from './llm.js';
 import { getCatalog, matchesFilter } from './catalog.js';
+import { resolveOptionPick } from './option-match.js';
 import { logger } from '../logger.js';
 
 const SKU_STANDALONE = /^[A-Z0-9]{4,8}(?:LL\/A|ZP\/A|AE\/A|AB\/A|B\/A)?$/i;
@@ -301,6 +302,15 @@ function isFollowUp(text, hasLastProduct) {
   return false;
 }
 
+function matchLastProductPick(userMessage, lastProducts) {
+  if (!Array.isArray(lastProducts) || lastProducts.length < 2) return null;
+  const titles = lastProducts.map((p) => String(p.title || ''));
+  const picked = resolveOptionPick(userMessage, titles);
+  if (!picked) return null;
+  const idx = titles.indexOf(picked);
+  return idx >= 0 ? lastProducts[idx] : null;
+}
+
 export async function buildResponse({ intent, profile, language, userMessage, history, lastProducts }) {
   if (!userMessage || !String(userMessage).trim()) {
     return { type: 'question', text: staticReply(language, 'empty_message'), field: 'category' };
@@ -335,6 +345,20 @@ export async function buildResponse({ intent, profile, language, userMessage, hi
   }
 
   const buyIntent = BUY_INTENT_RE.test(trimmed) || YES_RE.test(trimmed);
+
+  const pickFromLast = matchLastProductPick(trimmed, lastProductsArr);
+  if (pickFromLast) {
+    const text = await phraseAnswer({
+      userMessage,
+      profile,
+      products: [pickFromLast],
+      intent: buyIntent ? 'buy_confirm' : 'product_confirm',
+      language,
+      history: historyArr,
+      lastProducts: [],
+    }).catch(() => staticReply(language, 'faq_fallback'));
+    return { type: 'answer', text, products: [pickFromLast] };
+  }
 
   const higherMatch = trimmed.match(HIGHER_SPEC_RE);
   const lowerMatch = trimmed.match(LOWER_SPEC_RE);
