@@ -69,6 +69,14 @@ function shouldIgnoreMessage(msg, me) {
   return false;
 }
 
+function isAdmin(msg) {
+  const uid = String(msg?.from?.id || '');
+  return config.TELEGRAM_ADMIN_USER_IDS && config.TELEGRAM_ADMIN_USER_IDS.has(uid);
+}
+
+const ADMIN_POS_RE = /^\s*(good|great|correct|yes|yep|yeah|ok|okay|ali|perfect|save|khoob(e)?|dorost(\s*bood)?|ali\s*shod|bezar\s*yadet|yadet\s*(bashe|bemoneh)|remember(\s*this)?|keep\s*this|zakhire\s*kon)[\s.!]*$/i;
+const ADMIN_NEG_RE = /^\s*(no|nope|na|bad|wrong|ghalat|eshtebah|hanuz|still\s*wrong|khaste\s*kardam|kharabe|not\s*(good|right|correct)|aval\s*check|redo|again|dobare|bad\s*ans)[\s.!]*$/i;
+
 async function handleIncoming(msg) {
   const chatId = msg.chat?.id;
   const threadId = msg.message_thread_id;
@@ -97,6 +105,98 @@ async function handleIncoming(msg) {
     const s = await getSession(sessionId); s.muted = false; await saveSession(sessionId, s);
     await sendMessage(chatId, 'Bot resumed.', { threadId });
     return;
+  }
+
+  // Admin natural-language feedback: "good" / "khoobe" / "dorost" → /ok+/yes (one-step save)
+  //                                   "bad" / "ghalat" / "no" → /check (re-analyze)
+  const admin = isAdmin(msg);
+  if (admin) {
+    const sess = await getSession(sessionId);
+    const hasPending = !!sess.pending_teach;
+    const hasRecent = (sess.history || []).some((h) => h.role === 'assistant');
+
+    if (hasRecent && ADMIN_POS_RE.test(userText)) {
+      // promote to save if pending_teach exists; otherwise treat last assistant reply as a teach target
+      if (!hasPending) {
+        const lastAssistant = [...(sess.history || [])].reverse().find((h) => h.role === 'assistant');
+        const lastUser = [...(sess.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
+        if (lastAssistant && lastUser) {
+          sess.pending_teach = {
+            question: lastUser.text,
+            answer: lastAssistant.text,
+            ts: new Date().toISOString(),
+            admin_confirmed: true,
+          };
+        }
+      }
+      const pt = sess.pending_teach;
+      if (!pt) {
+        await sendMessage(chatId, 'Hichi baraye save nist. Aval ye soal beporsid.', { threadId });
+        return;
+      }
+      try {
+        const cfgPath = path.resolve(__dirname, '..', '..', 'config', 'custom_answers.md');
+        const block = `\n\n### Q: ${pt.question}\n### A: ${pt.answer}\n<!-- taught ${pt.ts} via admin NL-confirm -->\n`;
+        fs.appendFileSync(cfgPath, block);
+        reloadKnowledge();
+        recordFeedback({
+          ts: new Date().toISOString(), tag: 'admin_nl_confirm',
+          chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
+          user_query: pt.question, teach_answer: pt.answer,
+        });
+        sess.pending_teach = null;
+        sess.pending_save_confirm = false;
+        await saveSession(sessionId, sess);
+        await sendMessage(chatId, `✅ Saved.\n\n"${pt.question}" → "${pt.answer.slice(0, 120)}${pt.answer.length > 120 ? '…' : ''}"`, { threadId });
+      } catch (err) {
+        logger.error({ err }, 'admin nl save failed');
+        await sendMessage(chatId, '❌ Save failed — ' + String(err?.message || err).slice(0, 200), { threadId });
+      }
+      return;
+    }
+
+    if (hasRecent && ADMIN_NEG_RE.test(userText)) {
+      // Treat as /check or /no — run self-correct
+      const lastAssistant = [...(sess.history || [])].reverse().find((h) => h.role === 'assistant');
+      const lastUser = [...(sess.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
+      if (!lastUser?.text || !lastAssistant?.text) {
+        await sendMessage(chatId, 'Hanuz hichi nis.', { threadId });
+        return;
+      }
+      const prev = sess.pending_teach;
+      const previousAttempts = [];
+      if (prev && prev.question === lastUser.text) {
+        previousAttempts.push(...(prev.previous_attempts || []));
+        if (prev.answer) previousAttempts.push(prev.answer);
+      }
+      await sendChatAction(chatId, 'typing', { threadId });
+      try {
+        const corrected = await selfCorrectAnswer({
+          userMessage: lastUser.text,
+          previousReply: lastAssistant.text,
+          previousAttempts,
+          profile: sess.profile || {},
+          products: sess.last_products || [],
+          language: sess.language || 'en',
+          history: sess.history || [],
+          lastProducts: sess.last_products || [],
+        });
+        sess.pending_teach = {
+          question: lastUser.text,
+          answer: corrected,
+          previous_attempts: previousAttempts,
+          ts: new Date().toISOString(),
+          auto_generated: true,
+          attempt: previousAttempts.length + 1,
+        };
+        await saveSession(sessionId, sess);
+        await sendMessage(chatId, corrected + '\n\n— — —\nBegu "good" age dorost / "bad" age hanuz ghalat.', { threadId });
+      } catch (err) {
+        logger.error({ err }, 'admin nl correct failed');
+        await sendMessage(chatId, '📝 Flag gerefit vali correct nashod. Log save shod.', { threadId });
+      }
+      return;
+    }
   }
 
   // /check /c /t /wrong /no — re-analyze khod-kar + generate javab-e jadid
