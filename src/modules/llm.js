@@ -276,7 +276,10 @@ function stripFormatting(text) {
   return s.trim();
 }
 
-export async function selfCorrectAnswer({ userMessage, previousReply, profile, products, language, history, lastProducts }) {
+export async function selfCorrectAnswer({ userMessage, previousReply, previousAttempts = [], profile, products, language, history, lastProducts }) {
+  const attemptsBlock = previousAttempts.length
+    ? `\n\nPREVIOUS ATTEMPTS THAT WERE ALSO WRONG (do NOT repeat any of these — find a genuinely different correct answer):\n${previousAttempts.map((a, i) => `Attempt #${i + 1}:\n${a}`).join('\n\n')}`
+    : '';
   const correctionNotice = `
 === CORRECTION MODE — IMPORTANT ===
 Your previous reply below was flagged as WRONG by the store owner.
@@ -285,17 +288,17 @@ ORIGINAL CUSTOMER QUESTION:
 ${userMessage}
 
 YOUR PREVIOUS (WRONG) REPLY:
-${previousReply}
+${previousReply}${attemptsBlock}
 
-NOW RE-ANALYZE:
-1. Check APPLE PRODUCT SPECS, APPLE CURRENT LINEUP, STORE POLICIES, PAYMENT METHODS, CUSTOM ANSWERS, and candidate_products very carefully.
-2. Figure out what was wrong (stale info, hallucinated spec, misread intent, outdated lineup, etc.).
-3. Produce the CORRECT answer, grounded in the knowledge files and current catalog.
+NOW RE-ANALYZE CAREFULLY:
+1. Read EVERY knowledge section again — APPLE PRODUCT SPECS, APPLE CURRENT LINEUP, STORE POLICIES, PAYMENT METHODS, CUSTOM ANSWERS — plus the live candidate_products.
+2. Find what was factually wrong. Consider: stale info, hallucinated spec, misread intent, outdated lineup, wrong category, missing stock check, wrong URL.
+3. If you previously tried ${previousAttempts.length} attempt(s) and all were wrong, the issue is deeper — maybe you're misunderstanding the question itself, or the info genuinely isn't in the knowledge. In that case, admit you need human help: "Let me check with our team — please share your WhatsApp and we'll follow up."
 
-Respond in this format:
+Output format (strict):
 • First line: "Fix — <1-line explanation of what was wrong>"
-• Next lines: the CORRECT answer (follow all normal tone/length/link-policy rules).
-• Keep it short: 3–6 lines total.`;
+• Next 2–5 lines: the CORRECT answer (follow tone/length/link-policy rules).
+• If you genuinely don't know and cannot find the answer in knowledge, say so clearly and offer to escalate.`;
   try {
     const resp = await client.chat.completions.create({
       model: config.OPENAI_MODEL,

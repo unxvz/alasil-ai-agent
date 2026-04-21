@@ -99,8 +99,11 @@ async function handleIncoming(msg) {
     return;
   }
 
-  // /check /c /t /wrong — re-analyze khod-kar + generate javab-e jadid
-  if (/^\/check\b/i.test(userText) || /^\/c\b/i.test(userText) || /^\/t\b/i.test(userText) || /^\/repeat\b/i.test(userText) || /^\/wrong\b/i.test(userText) || /^\/ghalat\b/i.test(userText) || /^\/eshtebah\b/i.test(userText) || /^\/bug\b/i.test(userText) || /^\/error\b/i.test(userText)) {
+  // /check /c /t /wrong /no — re-analyze khod-kar + generate javab-e jadid
+  // /no continues the correction loop: also marks the LAST attempt as wrong
+  const isCheckCmd = /^\/check\b/i.test(userText) || /^\/c\b/i.test(userText) || /^\/t\b/i.test(userText) || /^\/repeat\b/i.test(userText) || /^\/wrong\b/i.test(userText) || /^\/ghalat\b/i.test(userText) || /^\/eshtebah\b/i.test(userText) || /^\/bug\b/i.test(userText) || /^\/error\b/i.test(userText);
+  const isNoCmd = /^\/no?\b/i.test(userText) || /^\/nope\b/i.test(userText) || /^\/na\b/i.test(userText);
+  if (isCheckCmd || isNoCmd) {
     const s = await getSession(sessionId);
     const lastAssistant = [...(s.history || [])].reverse().find((h) => h.role === 'assistant');
     const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
@@ -108,17 +111,38 @@ async function handleIncoming(msg) {
       await sendMessage(chatId, 'Hanuz hichi nis. Aval ye chizi beporsid.', { threadId });
       return;
     }
+
+    // Build list of previously-wrong attempts:
+    // - the original (wrong) bot reply
+    // - plus any previous pending_teach answers that the user said /no to
+    const pt = s.pending_teach;
+    const previousAttempts = [];
+    if (pt && pt.question === lastUser.text) {
+      previousAttempts.push(...(pt.previous_attempts || []));
+      if (pt.answer) previousAttempts.push(pt.answer);
+    }
+
+    const attemptNum = previousAttempts.length + 1;
     recordFeedback({
-      ts: new Date().toISOString(), tag: 'flagged_wrong',
+      ts: new Date().toISOString(), tag: isNoCmd ? 'still_wrong' : 'flagged_wrong',
+      attempt: attemptNum,
       chatId, sessionId, from: msg.from?.username || msg.from?.first_name || msg.from?.id,
       user_query: lastUser.text, bot_reply: lastAssistant.text,
+      previous_attempts: previousAttempts,
       profile: s.profile || {}, last_products: (s.last_products || []).map((p) => ({ title: p.title, sku: p.sku })),
     });
+
+    if (attemptNum > 4) {
+      await sendMessage(chatId, "⚠️ 4 bar emtehan kardam va natoonestam javab-e dorost bedam. Lotfan shoma ba /b <javab-e dorost> be man yad bedid. Ya man ba tim-e shoma (@alasilAi_support) tamas migiram.", { threadId });
+      return;
+    }
+
     await sendChatAction(chatId, 'typing', { threadId });
     try {
       const corrected = await selfCorrectAnswer({
         userMessage: lastUser.text,
         previousReply: lastAssistant.text,
+        previousAttempts,
         profile: s.profile || {},
         products: s.last_products || [],
         language: s.language || 'en',
@@ -128,11 +152,16 @@ async function handleIncoming(msg) {
       s.pending_teach = {
         question: lastUser.text,
         answer: corrected,
+        previous_attempts: previousAttempts,
         ts: new Date().toISOString(),
         auto_generated: true,
+        attempt: attemptNum,
       };
       await saveSession(sessionId, s);
-      await sendMessage(chatId, corrected + '\n\n— — —\nAge in javab dorost ast, /ok bezan ta hamishe save beshe. Age hanuz ghalat ast, /t dobare bezan.', { threadId });
+      const hint = attemptNum === 1
+        ? '\n\n— — —\nAge in javab dorost ast, /ok bezan ta hamishe save beshe. Age ghalat ast, /no bezan ta dobare emtehan konam.'
+        : `\n\n— — —\nAttempt #${attemptNum} — age hanuz ghalat, /no bezan. Age dorost, /ok.`;
+      await sendMessage(chatId, corrected + hint, { threadId });
     } catch (err) {
       logger.error({ err }, 'self-correct failed');
       await sendMessage(chatId, '📝 Flag gerefit vali nemitounam khodam correct-esh konam alan. Log save shod baraye barresi.', { threadId });
