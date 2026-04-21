@@ -1,0 +1,32 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+/tmp/*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursor/
+
+# Runtime / cache
+cache/
+*.db
+*.sqlite
+.redis/
+
+# Auto-synced (regenerated)
+config/apple_current_lineup.md
+
+# Local only
+supervisor-boot.log
