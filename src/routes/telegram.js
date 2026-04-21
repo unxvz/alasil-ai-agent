@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Router } from 'express';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -8,6 +11,22 @@ import { extractEntities } from '../modules/entities.js';
 import { getSession, saveSession, resetSession, mergeProfile, appendHistory } from '../modules/context.js';
 import { buildResponse } from '../modules/response.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FEEDBACK_LOG = path.resolve(__dirname, '..', '..', 'logs', 'feedback.jsonl');
+
+function ensureFeedbackDir() {
+  try { fs.mkdirSync(path.dirname(FEEDBACK_LOG), { recursive: true }); } catch {}
+}
+
+function recordFeedback(entry) {
+  ensureFeedbackDir();
+  try {
+    fs.appendFileSync(FEEDBACK_LOG, JSON.stringify(entry) + '\n');
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err) }, 'feedback append failed');
+  }
+}
 
 export const telegramRouter = Router();
 
@@ -75,6 +94,29 @@ async function handleIncoming(msg) {
   if (/^\/resume\b/i.test(userText)) {
     const s = await getSession(sessionId); s.muted = false; await saveSession(sessionId, s);
     await sendMessage(chatId, 'Bot resumed.', { threadId });
+    return;
+  }
+
+  const feedbackMatch = userText.match(/^\/(wrong|bad|fix|error|bug|ghalat|fixit|eshtebah)\b\s*(.*)$/i);
+  if (feedbackMatch) {
+    const note = (feedbackMatch[2] || '').trim();
+    const s = await getSession(sessionId);
+    const lastAssistant = [...(s.history || [])].reverse().find((h) => h.role === 'assistant');
+    const lastUser = [...(s.history || [])].reverse().filter((h) => h.role === 'user').slice(0, 2)[1];
+    recordFeedback({
+      ts: new Date().toISOString(),
+      chatId,
+      sessionId,
+      from: msg.from?.username || msg.from?.first_name || msg.from?.id,
+      user_query: lastUser?.text || null,
+      bot_reply: lastAssistant?.text || null,
+      note: note || null,
+      profile: s.profile || {},
+      last_products: (s.last_products || []).map((p) => ({ title: p.title, sku: p.sku })),
+      intent: s.intent || null,
+      language: s.language || null,
+    });
+    await sendMessage(chatId, '📝 Noted — mishnasam. Man oon javab ro barresi mikonam va fix. Thanks!', { threadId });
     return;
   }
 
