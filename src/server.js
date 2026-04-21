@@ -30,7 +30,15 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/health', async (_req, res) => {
+// Support URL_BASE_PATH for sub-URI deployments (e.g. cPanel Passenger at /agent)
+const BASE_PATH = (process.env.URL_BASE_PATH || process.env.PASSENGER_BASE_URI || '').replace(/\/$/, '');
+if (BASE_PATH) logger.info({ BASE_PATH }, 'URL_BASE_PATH set');
+
+const router = express.Router();
+
+router.get('/', (_req, res) => res.json({ ok: true, service: 'alasil-ai-agent', version: '0.1.0' }));
+
+router.get('/health', async (_req, res) => {
   try {
     const shopify = await pingShopify();
     res.json({
@@ -52,8 +60,12 @@ const chatLimiter = rateLimit({
   message: { error: { code: 'RATE_LIMIT', message: 'Too many requests' } },
 });
 
-app.use('/chat', chatLimiter, chatRouter);
-app.use('/webhook/telegram', express.json({ limit: '128kb' }), telegramRouter);
+router.use('/chat', chatLimiter, chatRouter);
+router.use('/webhook/telegram', express.json({ limit: '128kb' }), telegramRouter);
+
+// Mount the router at both root and BASE_PATH so same code works locally and under Passenger sub-URI.
+app.use(router);
+if (BASE_PATH) app.use(BASE_PATH, router);
 
 app.use((_req, res) => {
   res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } });
