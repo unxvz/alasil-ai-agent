@@ -4,14 +4,49 @@ import { logger } from '../logger.js';
 
 const KEY_PREFIX = 'ai-support:session:';
 
+// In-memory fallback when Redis is unavailable (single-process, small-scale OK)
+const _memStore = new Map();
+const memGet = (k) => {
+  const entry = _memStore.get(k);
+  if (!entry) return null;
+  if (entry.expireAt && Date.now() > entry.expireAt) { _memStore.delete(k); return null; }
+  return entry.value;
+};
+const memSet = (k, v, ttlSec) => {
+  _memStore.set(k, { value: v, expireAt: ttlSec ? Date.now() + ttlSec * 1000 : null });
+};
+const memDel = (k) => _memStore.delete(k);
+
 let client = null;
+let redisDisabled = false;
+
+function shouldUseRedis() {
+  if (redisDisabled) return false;
+  const url = String(config.REDIS_URL || '').trim();
+  if (!url || url === 'redis://localhost:6379') {
+    if (!redisDisabled) {
+      logger.info('Redis URL empty/default — using in-memory session store');
+      redisDisabled = true;
+    }
+    return false;
+  }
+  return true;
+}
 
 async function ensureClient() {
+  if (!shouldUseRedis()) return null;
   if (client && client.isOpen) return client;
-  client = createClient({ url: config.REDIS_URL });
-  client.on('error', (err) => logger.error({ err }, 'Redis error'));
-  await client.connect();
-  return client;
+  try {
+    client = createClient({ url: config.REDIS_URL, socket: { connectTimeout: 3000, reconnectStrategy: false } });
+    client.on('error', (err) => logger.warn({ err: String(err?.message || err) }, 'Redis error (falling back to memory)'));
+    await client.connect();
+    return client;
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err) }, 'Redis connect failed — disabling and using in-memory store');
+    redisDisabled = true;
+    client = null;
+    return null;
+  }
 }
 
 function key(sessionId) {
@@ -33,11 +68,18 @@ function emptyState() {
 }
 
 export async function getSession(sessionId) {
+  const k = key(sessionId);
   const c = await ensureClient();
-  const raw = await c.get(key(sessionId));
+  let raw;
+  if (c) {
+    try { raw = await c.get(k); }
+    catch (err) { logger.warn({ err: String(err?.message || err) }, 'Redis get failed — using memory'); raw = memGet(k); }
+  } else {
+    raw = memGet(k);
+  }
   if (!raw) return emptyState();
   try {
-    return JSON.parse(raw);
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
   } catch (err) {
     logger.warn({ err, sessionId }, 'Corrupt session, resetting');
     return emptyState();
@@ -45,14 +87,23 @@ export async function getSession(sessionId) {
 }
 
 export async function saveSession(sessionId, state) {
-  const c = await ensureClient();
+  const k = key(sessionId);
   state.updated_at = Date.now();
-  await c.set(key(sessionId), JSON.stringify(state), { EX: config.SESSION_TTL_SECONDS });
+  const c = await ensureClient();
+  if (c) {
+    try { await c.set(k, JSON.stringify(state), { EX: config.SESSION_TTL_SECONDS }); return; }
+    catch (err) { logger.warn({ err: String(err?.message || err) }, 'Redis set failed — using memory'); }
+  }
+  memSet(k, state, config.SESSION_TTL_SECONDS);
 }
 
 export async function resetSession(sessionId) {
+  const k = key(sessionId);
   const c = await ensureClient();
-  await c.del(key(sessionId));
+  if (c) {
+    try { await c.del(k); } catch (err) { logger.warn({ err }, 'Redis del failed'); }
+  }
+  memDel(k);
 }
 
 const NEW_SEARCH_PHRASE = /\b(looking\s*for|show\s*me|find\s*me|i\s*need(\s*a|n)?|i\s*want(\s*to\s*buy|\s*a|\s*an)?|i'?m\s*looking|can\s*you\s*(find|show|recommend))\b/i;
