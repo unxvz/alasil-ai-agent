@@ -41,6 +41,39 @@ function isDuplicate(sessionId, text) {
   return false;
 }
 
+// ─── Debouncer: merge rapid-fire messages into one turn ───
+// Customers often type a thought in 2-3 separate Telegram messages
+// ("hello" / "i need Apple Pencil Pro" / "do you have?"). Without debouncing,
+// the bot replies to each fragment separately and the conversation becomes
+// disjointed. This buffers messages per session and processes them as ONE
+// turn after a quiet window, so the bot sees the full thought.
+const DEBOUNCE_MS = Math.max(
+  500,
+  Math.min(10_000, parseInt(process.env.TELEGRAM_DEBOUNCE_MS || '2500', 10))
+);
+const _pending = new Map(); // sessionId -> { texts, lastMsg, timer }
+
+function scheduleFlush(sessionId, onFlush) {
+  const state = _pending.get(sessionId);
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    _pending.delete(sessionId);
+    onFlush(state);
+  }, DEBOUNCE_MS);
+}
+
+function bufferMessage(sessionId, msg, text, onFlush) {
+  let state = _pending.get(sessionId);
+  if (state) {
+    state.texts.push(text);
+    state.lastMsg = msg;
+  } else {
+    state = { texts: [text], lastMsg: msg, timer: null };
+    _pending.set(sessionId, state);
+  }
+  scheduleFlush(sessionId, onFlush);
+}
+
 function shouldIgnoreMessage(msg, me) {
   if (!msg) return true;
   if (!msg.text || typeof msg.text !== 'string') return true;
@@ -185,6 +218,25 @@ async function handleAgent(msg, session, sessionId, userText) {
 // ────────────────────────────────────────────────────────────────────────────
 // Router
 // ────────────────────────────────────────────────────────────────────────────
+// Runs after the debounce window closes. Fetches the latest session state and
+// routes through agent or legacy pipeline.
+async function processBufferedTurn(sessionId, msg, combinedText) {
+  const session = await getSession(sessionId);
+  if (session.muted) return;
+
+  if (config.USE_AGENT) {
+    try {
+      await handleAgent(msg, session, sessionId, combinedText);
+      return;
+    } catch (err) {
+      logger.error({ err: String(err?.message || err), sessionId }, 'agent path threw — falling back to legacy');
+      // Fall through to legacy pipeline for robustness.
+    }
+  }
+
+  await handleLegacy(msg, session, sessionId, combinedText);
+}
+
 async function handleIncoming(msg) {
   const chatId = msg.chat?.id;
   const threadId = msg.message_thread_id;
@@ -196,6 +248,14 @@ async function handleIncoming(msg) {
   if (isDuplicate(sessionId, userText)) {
     logger.info({ sessionId, chatId, threadId }, 'telegram duplicate skipped');
     return;
+  }
+
+  // Commands are processed IMMEDIATELY and flush any pending buffer so we
+  // don't end up replaying stale text right after a /reset.
+  const isCommand = /^\/(start|reset|restart|pause|resume)\b/i.test(userText);
+  if (isCommand) {
+    const pending = _pending.get(sessionId);
+    if (pending) { clearTimeout(pending.timer); _pending.delete(sessionId); }
   }
 
   if (/^\/(start|reset|restart)\b/i.test(userText)) {
@@ -215,21 +275,18 @@ async function handleIncoming(msg) {
     return;
   }
 
-  const session = await getSession(sessionId);
-  if (session.muted) return;
-  session.turns = (session.turns || 0) + 1;
-
-  if (config.USE_AGENT) {
-    try {
-      await handleAgent(msg, session, sessionId, userText);
-      return;
-    } catch (err) {
-      logger.error({ err: String(err?.message || err), sessionId }, 'agent path threw — falling back to legacy');
-      // Fall through to legacy pipeline for robustness.
+  // Buffer non-command messages. More messages within DEBOUNCE_MS get merged.
+  bufferMessage(sessionId, msg, userText, async (state) => {
+    const combined = state.texts.join('\n');
+    if (state.texts.length > 1) {
+      logger.info({ sessionId, fragments: state.texts.length }, 'merged debounced fragments');
     }
-  }
-
-  await handleLegacy(msg, session, sessionId, userText);
+    try {
+      await processBufferedTurn(sessionId, state.lastMsg, combined);
+    } catch (err) {
+      logger.error({ err: String(err?.message || err), sessionId, fragments: state.texts.length }, 'debounced flush failed');
+    }
+  });
 }
 
 telegramRouter.post('/:secret', async (req, res) => {
