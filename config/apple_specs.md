@@ -275,16 +275,44 @@ Works with:
 - iPad Pro 9.7", iPad Pro 10.5", iPad Pro 12.9" (1st, 2nd gen)
 **NOT compatible with iPad Air M2/M3/M4, iPad Pro M4/M5, iPad mini A17 Pro, iPad 11th gen (A16), or any 2024+ iPad.**
 
-### Common customer question mapping
+### Apple Pencil × iPad — FULL LOOKUP TABLE
+When the customer names an iPad, these are the ONLY Pencils that work:
+
+| iPad model                          | Pencil Pro | Pencil USB-C | Pencil 2 | Pencil 1                   |
+|-------------------------------------|------------|--------------|----------|----------------------------|
+| iPad Pro 11"/13" (M5, 2025)         | YES        | YES          | NO       | NO                         |
+| iPad Pro 11"/13" (M4, 2024)         | YES        | YES          | NO       | NO                         |
+| iPad Pro 11" (1st–4th gen)          | NO         | YES          | YES      | NO                         |
+| iPad Pro 12.9" (3rd–6th gen)        | NO         | YES          | YES      | NO                         |
+| iPad Pro 10.5" / 9.7"               | NO         | NO           | NO       | YES                        |
+| iPad Air (M4, 2026)                 | YES        | YES          | NO       | NO                         |
+| iPad Air (M3, 2025)                 | YES        | YES          | NO       | NO                         |
+| iPad Air (M2, 11"/13")              | YES        | YES          | NO       | NO                         |
+| iPad Air (5th gen)                  | NO         | YES          | YES      | NO                         |
+| iPad Air (4th gen)                  | NO         | YES          | YES      | NO                         |
+| iPad Air (3rd gen)                  | NO         | NO           | NO       | YES                        |
+| iPad mini (A17 Pro, 2024)           | YES        | YES          | NO       | NO                         |
+| iPad mini (6th gen)                 | NO         | YES          | YES      | NO                         |
+| iPad mini (5th gen)                 | NO         | NO           | NO       | YES                        |
+| iPad (11th gen, A16, 2025)          | NO         | YES          | NO       | YES (with USB-C adapter)   |
+| iPad (10th gen, 2022)               | NO         | YES          | NO       | YES (with USB-C adapter)   |
+| iPad (6th–9th gen)                  | NO         | NO           | NO       | YES                        |
+
+### Common customer question mapping (quote verbatim when asked)
 - "Does Pencil 1 work with iPad Air M4?" → **No.** iPad Air M4 supports Apple Pencil Pro and Apple Pencil (USB-C) only.
 - "Does Pencil Pro work with iPad Air M4?" → **Yes.** iPad Air M4 is built for Apple Pencil Pro.
 - "Does Pencil Pro work with iPad Pro M4?" → **Yes.** iPad Pro M4 is built for Apple Pencil Pro.
+- "Does Pencil Pro work with iPad 11th gen (A16)?" → **No.** iPad (A16) supports Apple Pencil (USB-C) and Apple Pencil 1 (with adapter) only. Pencil Pro is for iPad Pro M4/M5, iPad Air M2/M3/M4, and iPad mini A17 Pro.
+- "Does Pencil Pro work with iPad (any entry-level)?" → **No.** Entry-level iPads never support Pencil Pro.
 - "Does Pencil USB-C work with iPad Air M4?" → **Yes.**
+- "Does Pencil USB-C work with iPad (A16)?" → **Yes.**
 - "Does Pencil 2 work with iPad Pro M4?" → **No.** iPad Pro M4/M5 supports Apple Pencil Pro and Apple Pencil (USB-C) only.
-- "Does Pencil 2 work with iPad Air M4?" → **No.** iPad Air M4 supports Apple Pencil Pro and Apple Pencil (USB-C) only.
+- "Does Pencil 2 work with iPad Air M4?" → **No.**
+- "Does Pencil 2 work with iPad (A16)?" → **No.**
 - "Which Pencil for my iPad Air M2?" → Apple Pencil Pro (best) or Apple Pencil (USB-C).
 - "Which Pencil for my iPad Air M4?" → Apple Pencil Pro (best) or Apple Pencil (USB-C).
 - "Which Pencil for iPad 11th gen (A16)?" → Apple Pencil (USB-C) or Apple Pencil 1 (with USB-C adapter).
+- "Which Pencil for iPad mini A17 Pro?" → Apple Pencil Pro (best) or Apple Pencil (USB-C).
 
 ## Charging compatibility quick reference
 - **MagSafe (iPhone):** all iPhone 12 and later — YES, supported. iPhone 15/16 MagSafe 15W. **iPhone Air supports MagSafe up to 20W.** iPhone 17 / 17 Pro / 17 Pro Max support MagSafe up to 25W. iPhone 17e supports MagSafe up to 20W.
@@ -292,6 +320,135 @@ Works with:
 - **Fast charge 50% in 30 min:** requires 20W USB-C power adapter or higher.
 - **USB-C:** all iPhones 15, 16, 17, Air, and all iPads since late 2018. MacBooks use MagSafe 3 + Thunderbolt USB-C.
 - **Lightning:** iPhone 14 and older. No current Apple product still sold ships with Lightning except very old stock.
+
+---
+
+## Magic Keyboard × iPad — compatibility matrix
+
+### Magic Keyboard for iPad Pro (M4, 2024 — new aluminum design, function row, trackpad)
+Works with:
+- iPad Pro 11" (M4) — get the 11-inch keyboard
+- iPad Pro 13" (M4) — get the 13-inch keyboard
+- iPad Pro 11" (M5, 2025) — same keyboard as M4
+- iPad Pro 13" (M5, 2025) — same keyboard as M4
+Does NOT work with: iPad Pro M2/M1, iPad Air (any), iPad entry, iPad mini.
+
+### Magic Keyboard (original, 2020 — all-black)
+Works with:
+- iPad Pro 11" (1st, 2nd, 3rd, 4th gen) / iPad Pro 12.9" (3rd, 4th, 5th, 6th gen)
+- iPad Air (4th gen, 5th gen)
+- iPad Air (M2) — 11-inch version only (the 13" iPad Air M2 needs the M2 11" keyboard — Apple sells an 11" and 13" variant of this original Magic Keyboard)
+Does NOT work with: iPad Pro M4/M5 (needs new Magic Keyboard for M4), entry iPads, iPad mini.
+
+### Magic Keyboard for iPad Air (M2/M3/M4, 2024+)
+This is the NEW Magic Keyboard designed for iPad Air M2/M3/M4. Works with:
+- iPad Air (M2, 11" and 13")
+- iPad Air (M3)
+- iPad Air (M4)
+Does NOT work with: iPad Pro (any), entry iPads, iPad mini.
+
+### Smart Keyboard Folio (older)
+Works with: iPad Pro 11" (1st–4th gen), iPad Pro 12.9" (3rd–6th gen), iPad (10th gen, 11th gen A16).
+Does NOT work with: iPad Pro M4/M5, iPad Air M2/M3/M4, iPad mini.
+
+### Common customer questions
+- "Does Magic Keyboard work with iPad Air M4?" → Only the "Magic Keyboard for iPad Air" (the new one). Not the old iPad Pro Magic Keyboard.
+- "Does Magic Keyboard for iPad Pro M4 fit my iPad Pro M2?" → **No.** M4 keyboard has a different cutout. Get the original 2020 Magic Keyboard for iPad Pro M1/M2.
+- "Does iPad mini have a Magic Keyboard?" → **No.** iPad mini has no Apple keyboard accessory.
+- "Does iPad 11th gen (A16) support Magic Keyboard?" → **No** — only Smart Keyboard Folio (older).
+
+---
+
+## Apple Watch bands — case size compatibility
+
+**Cross-compatible groups** (a band that fits one size in the group fits all sizes in the group):
+
+- **49mm**: Apple Watch Ultra 1, Ultra 2, Ultra 3 → use 49mm bands only
+- **46mm** (Series 10, Series 11 aluminum/titanium larger): use 46mm bands
+- **42mm** (Series 10, Series 11 smaller): use 42mm bands
+- **45mm** (Series 7/8/9 larger): use 45mm bands — also compatible with 44mm and 42mm older bands
+- **44mm / 42mm older**: Series 4/5/6/SE/SE 2/SE 3 larger cases
+- **41mm** (Series 7/8/9 smaller): use 41mm bands — also compatible with 40mm and 38mm older bands
+- **40mm / 38mm older**: Series 4/5/6/SE/SE 2/SE 3 smaller cases
+
+### Common customer questions
+- "Can I use my Series 8 band on an Ultra 3?" → **No.** Ultra 3 is 49mm only; Series 8 bands are 41mm or 45mm.
+- "Will a 44mm band fit my Series 10 46mm?" → **No.** 46mm cases need 46mm bands.
+- "Do old 42mm bands fit Series 11?" → **Only the 42mm Series 11** variant. The 46mm Series 11 uses different bands.
+
+---
+
+## MagSafe — iPhone charging wattage by model
+
+| iPhone                         | Max MagSafe wireless wattage |
+|--------------------------------|------------------------------|
+| iPhone 17 Pro Max              | 25W                          |
+| iPhone 17 Pro                  | 25W                          |
+| iPhone 17                      | 25W                          |
+| iPhone 17e                     | 20W                          |
+| iPhone Air                     | 20W                          |
+| iPhone 16 Pro Max / 16 Pro     | 25W (with 30W+ adapter)      |
+| iPhone 16 Plus / 16 / 16e      | 25W (with 30W+ adapter)      |
+| iPhone 15 series               | 15W                          |
+| iPhone 14 series               | 15W                          |
+| iPhone 13 / 12 series          | 15W                          |
+
+### Common customer questions
+- "Does iPhone Air support MagSafe?" → **Yes, up to 20W.**
+- "Does iPhone 17 Pro support MagSafe?" → **Yes, up to 25W** with a 30W+ USB-C adapter.
+- "Is my MagSafe charger the same as my old iPhone 12's?" → Physically yes (magnets) but newer iPhones can pull more power with a better adapter.
+
+### MagSafe accessories (2026)
+- **MagSafe Charger** (1m/2m USB-C cable): works with all iPhone 12 and later, AirPods Pro 2/3 case, AirPods 4 (ANC), Apple Watch via separate charger.
+- **MagSafe Duo**: discontinued.
+- **MagSafe Wallet (FineWoven → FineWoven replacement)**: fits all iPhone 12–17 with no case or with MagSafe-compatible case.
+- **MagSafe Battery**: works with iPhone 12 and later; Apple's new MagSafe Battery (2024) is 20W, compatible with iPhone 15 and newer, up to 40 hours with iPhone Air.
+
+---
+
+## iPhone 16 (still sold, not current flagship)
+- Chip: A18 — 6-core CPU, 5-core GPU, 16-core Neural Engine
+- Display: 6.1-inch Super Retina XDR OLED, 2556x1179, 60Hz (no ProMotion)
+- Rear cameras: 48MP Fusion Main, 12MP Ultra Wide
+- Battery: up to 22 hours video playback
+- Charging: MagSafe up to 25W (with 30W+ adapter), wired fast charge
+- Colors: Black, White, Pink, Teal, Ultramarine
+- Arabic UI supported
+- Source: https://www.apple.com/iphone-16/specs/
+
+## iPhone 16 Pro / 16 Pro Max (still sold)
+- Chip: A18 Pro — 6-core CPU, 6-core GPU
+- Display: 6.3" / 6.9" Super Retina XDR, ProMotion 120Hz, Always-On
+- Cameras: 48MP Main + 48MP Ultra Wide + 12MP Telephoto (5x Pro Max)
+- Battery: up to 27h (Pro) / 33h (Pro Max) video playback
+- Colors: Black Titanium, White Titanium, Natural Titanium, Desert Titanium
+- Arabic UI supported
+
+---
+
+## AirPods × iPhone / iPad / Mac compatibility
+
+All AirPods (1st gen through Max 2) work with any Apple device running:
+- iOS 12+ / iPadOS 13+ / macOS 10.14+ / watchOS 5+ / tvOS 12+
+So: any iPhone 6s or newer, any iPad released since 2013, any Mac from 2012+.
+
+### Feature gates
+- **Spatial Audio with dynamic head tracking**: needs AirPods Pro / Pro 2 / Pro 3 / Max / AirPods 3 / 4 + iPhone with A12 Bionic or later.
+- **Hearing Aid feature (AirPods Pro 3)**: needs iOS 18.1+ and an iPhone with A14 or newer (iPhone 12 and up).
+- **Heart-rate sensor during workouts (AirPods Pro 3)**: needs iOS 18.1+ and an Apple Watch OR a compatible iPhone.
+- **Lossless audio over USB-C (AirPods Max 2)**: plug the included USB-C cable into any iPhone 15 or later, iPad with USB-C, or Mac.
+
+### Common customer questions
+- "Will AirPods 4 work with my iPhone 11?" → **Yes.** All AirPods work with any iPhone running iOS 12+ (iPhone 11 runs iOS 18, fully compatible).
+- "Will AirPods Pro 3 work with an Android phone?" → They'll pair as generic Bluetooth earbuds, but you lose Spatial Audio, Active Noise Cancellation control, and Find My.
+- "Do AirPods Max 2 need an adapter for my iPhone 15?" → **No.** iPhone 15 and newer have USB-C — the cable works directly.
+
+---
+
+## Apple Watch × iPhone pairing requirements
+- **Apple Watch Series 11 / Ultra 3 / SE 3 (2025)**: requires iPhone XS or newer running iOS 18+.
+- **Older Apple Watches** (Series 9, Ultra 2 etc): work with iPhone Xs or newer.
+- A customer with an iPhone 8 or older cannot pair a current Apple Watch.
 
 ## Rules for using this file
 - Quote values verbatim from the spec list above — do not paraphrase chip/core/camera numbers.
