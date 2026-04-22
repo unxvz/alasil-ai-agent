@@ -437,6 +437,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         const corrMsgs = new Set(corrections.map(c => (c.user_msg || '').trim()));
 
         // Recent turns with flag button + inline form
+        // If a correction form is currently open, DO NOT re-render the table —
+        // otherwise auto-refresh wipes whatever the owner is typing.
+        if (openFormKey) {
+          // Still refresh the corrections panel and stats (already done above).
+          lastTurns = stats.total_turns;
+          return;
+        }
         const rows = recent.turns || [];
         document.getElementById('recent-body').innerHTML = rows.length === 0
           ? '<tr><td colspan="8" class="loading">No turns yet — send a Telegram message to the bot</td></tr>'
