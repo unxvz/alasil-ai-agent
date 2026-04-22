@@ -1,5 +1,5 @@
 // Self-contained monitoring dashboard HTML. One file, no external deps.
-// Polls /agent/stats and /agent/recent every 5s.
+// Polls /agent/stats, /agent/recent, /agent/corrections every 5s.
 
 export const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -43,12 +43,13 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .card .value.bad { color: var(--red); }
   .card .hint { color: var(--text-dim); font-size: 11px; margin-top: 6px; }
   .section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 20px; overflow: hidden; }
-  .section h2 { margin: 0; padding: 14px 16px; font-size: 14px; font-weight: 600; border-bottom: 1px solid var(--border); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .section h2 { margin: 0; padding: 14px 16px; font-size: 14px; font-weight: 600; border-bottom: 1px solid var(--border); color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
+  .section h2 .hint { text-transform: none; font-weight: 400; font-size: 11px; color: var(--text-dim); letter-spacing: 0; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { padding: 10px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+  th, td { padding: 10px 16px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--text-dim); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; background: var(--panel-2); }
   tr:last-child td { border-bottom: none; }
-  tr:hover td { background: var(--panel-2); }
+  tr.recent-row:hover td { background: var(--panel-2); }
   .mono { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
   .tool-pill { display: inline-block; padding: 2px 8px; margin: 2px 2px 2px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: var(--mono); }
   .tool-pill.empty { color: var(--yellow); border-color: rgba(210, 153, 34, 0.3); }
@@ -56,16 +57,49 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .status-err { color: var(--red); font-weight: 600; }
   .status-max { color: var(--yellow); font-weight: 600; }
   .status-ok { color: var(--green); font-weight: 600; }
-  .text-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  @media (max-width: 900px) { .text-cell { max-width: 180px; } }
+  .text-cell { max-width: 320px; }
+  .text-cell .text { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; }
+  @media (max-width: 900px) { .text-cell { max-width: 200px; } }
   .ts { font-family: var(--mono); color: var(--text-dim); font-size: 11px; white-space: nowrap; }
   .controls { display: flex; gap: 8px; align-items: center; }
   button { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
   button:hover { background: var(--panel-2); border-color: var(--accent); }
+  button.flag { background: transparent; border: 1px solid var(--border); color: var(--text-dim); padding: 4px 8px; font-size: 11px; }
+  button.flag:hover { color: var(--red); border-color: var(--red); }
+  button.flag.flagged { color: var(--red); border-color: var(--red); background: rgba(248, 81, 73, 0.08); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; }
+  button.primary:hover { background: #79b8ff; border-color: #79b8ff; color: #000; }
+  button.danger { color: var(--red); border-color: rgba(248, 81, 73, 0.3); }
+  button.danger:hover { background: rgba(248, 81, 73, 0.1); }
   .loading { color: var(--text-dim); font-size: 13px; padding: 20px; text-align: center; }
   .alert-banner { background: rgba(248, 81, 73, 0.1); border: 1px solid var(--red); color: var(--red); padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
   .alert-banner .alert-title { font-weight: 600; margin-right: 8px; }
   .alert-banner.warn { background: rgba(210, 153, 34, 0.1); border-color: var(--yellow); color: var(--yellow); }
+  .alert-banner.ok { background: rgba(63, 185, 80, 0.1); border-color: var(--green); color: var(--green); }
+
+  /* Correction inline form */
+  .correction-form { display: none; background: rgba(248, 81, 73, 0.06); border: 1px solid rgba(248, 81, 73, 0.2); border-radius: 8px; padding: 12px; margin: 8px 0; }
+  .correction-form.open { display: block; }
+  .correction-form label { display: block; color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; margin: 8px 0 4px 0; }
+  .correction-form textarea { width: 100%; min-height: 60px; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; font-family: inherit; font-size: 13px; resize: vertical; }
+  .correction-form textarea:focus { outline: none; border-color: var(--accent); }
+  .correction-form .actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+
+  /* Corrections list */
+  .correction-item { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .correction-item:last-child { border-bottom: none; }
+  .correction-item .row { display: flex; gap: 12px; align-items: flex-start; }
+  .correction-item .body { flex: 1; min-width: 0; }
+  .correction-item .ts-small { color: var(--text-dim); font-size: 11px; font-family: var(--mono); margin-bottom: 4px; }
+  .correction-item .q { font-size: 13px; margin: 4px 0; }
+  .correction-item .q-label { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .correction-item .wrong-text { color: var(--red); font-size: 12px; background: rgba(248, 81, 73, 0.06); padding: 6px 10px; border-radius: 6px; margin: 4px 0; white-space: pre-wrap; }
+  .correction-item .correct-text { color: var(--green); font-size: 12px; background: rgba(63, 185, 80, 0.06); padding: 6px 10px; border-radius: 6px; margin: 4px 0; white-space: pre-wrap; }
+
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 100; }
+  .toast.show { opacity: 1; }
+  .toast.ok { border-color: var(--green); color: var(--green); }
+  .toast.err { border-color: var(--red); color: var(--red); }
 </style>
 </head>
 <body>
@@ -99,9 +133,18 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       <div class="hint"><span id="m-err-n">0</span> / <span id="m-turns-2">0</span> turns</div>
     </div>
     <div class="card">
-      <div class="label">Max-iter rate</div>
-      <div class="value" id="m-max">—</div>
-      <div class="hint"><span id="m-max-n">0</span> turns hit max</div>
+      <div class="label">Corrections learned</div>
+      <div class="value ok" id="m-corr">—</div>
+      <div class="hint">Injected into agent prompt</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Corrections (owner feedback)
+      <span class="hint">Flagged replies and preferred answers — agent learns from these on every turn</span>
+    </h2>
+    <div id="corrections-body">
+      <div class="loading">Loading…</div>
     </div>
   </div>
 
@@ -118,7 +161,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   </div>
 
   <div class="section">
-    <h2>Recent turns</h2>
+    <h2>Recent turns
+      <span class="hint">Click Flag on any turn to teach the agent the correct answer</span>
+    </h2>
     <table>
       <thead>
         <tr>
@@ -129,16 +174,30 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
           <th>Tools</th>
           <th>Reply</th>
           <th style="text-align:right">Latency</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="recent-body">
-        <tr><td colspan="7" class="loading">Loading…</td></tr>
+        <tr><td colspan="8" class="loading">Loading…</td></tr>
       </tbody>
     </table>
   </div>
 
+  <div id="toast" class="toast"></div>
+
   <script>
-    const ROOT = window.location.pathname.replace(/\\/dashboard.*/, '');
+    const PATHNAME = window.location.pathname;
+    // Strip /dashboard[/secret] from pathname to find the app root (supports BASE_PATH).
+    const ROOT = PATHNAME.replace(/\\/dashboard(\\/[^/?#]+)?$/, '');
+    // If URL has /dashboard/:secret we pass the secret back on gated endpoints.
+    const SECRET_MATCH = PATHNAME.match(/\\/dashboard\\/([^/?#]+)$/);
+    const SECRET = SECRET_MATCH ? SECRET_MATCH[1] : '';
+    const SECRET_HEADERS = SECRET ? { 'X-Dashboard-Secret': SECRET } : {};
+
+    function api(p, opts) {
+      const qs = SECRET ? (p.includes('?') ? '&' : '?') + 'secret=' + encodeURIComponent(SECRET) : '';
+      return fetch(ROOT + p + qs, Object.assign({ cache: 'no-store', headers: SECRET_HEADERS }, opts || {}));
+    }
 
     function fmtMs(ms) {
       if (!ms && ms !== 0) return '—';
@@ -154,19 +213,93 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       if (m > 0) return m + 'm ' + sec + 's';
       return sec + 's';
     }
-    function fmtPct(rate) {
-      return (rate * 100).toFixed(1) + '%';
-    }
+    function fmtPct(rate) { return (rate * 100).toFixed(1) + '%'; }
     function fmtTs(iso) {
       try {
         const d = new Date(iso);
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       } catch { return iso; }
     }
-    function escapeHtml(s) {
+    function fmtDateTime(iso) {
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    }
+    function esc(s) {
       return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function toast(msg, kind) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = 'toast show ' + (kind || 'ok');
+      setTimeout(() => { el.className = 'toast ' + (kind || 'ok'); }, 3000);
+    }
+
+    // Track which row's correction form is open
+    let openFormKey = null;
+    // Track which turns have been flagged (by msg+ts key)
+    let flaggedKeys = new Set();
+
+    function turnKey(t) { return (t.ts || '') + '::' + (t.msg || ''); }
+
+    function toggleForm(key) {
+      openFormKey = (openFormKey === key) ? null : key;
+      document.querySelectorAll('.correction-form').forEach(el => {
+        el.classList.toggle('open', el.getAttribute('data-key') === openFormKey);
+      });
+      document.querySelectorAll('button.flag').forEach(el => {
+        el.classList.toggle('flagged', el.getAttribute('data-key') === openFormKey);
+      });
+    }
+
+    async function submitCorrection(key, userMsg, wrongReply) {
+      const form = document.querySelector('.correction-form[data-key="' + CSS.escape(key) + '"]');
+      if (!form) return;
+      const correct = form.querySelector('textarea[name=correct]').value.trim();
+      const note = form.querySelector('textarea[name=note]').value.trim();
+      if (!correct && !note) {
+        toast('Add either a correct reply or a note', 'err');
+        return;
+      }
+      try {
+        const resp = await api('/agent/corrections', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, SECRET_HEADERS),
+          body: JSON.stringify({ user_msg: userMsg, wrong_reply: wrongReply, correct_reply: correct, note: note }),
+        });
+        if (!resp.ok) {
+          const txt = await resp.text();
+          toast('Save failed: ' + resp.status + ' ' + txt.slice(0, 80), 'err');
+          return;
+        }
+        toast('Correction saved — agent will use it on next turn');
+        flaggedKeys.add(key);
+        openFormKey = null;
+        form.querySelector('textarea[name=correct]').value = '';
+        form.querySelector('textarea[name=note]').value = '';
+        refresh(true);
+      } catch (err) {
+        toast('Network error: ' + err.message, 'err');
+      }
+    }
+
+    async function deleteCorrection(id) {
+      if (!confirm('Delete this correction? The agent will no longer use it.')) return;
+      try {
+        const resp = await api('/agent/corrections/' + encodeURIComponent(id), {
+          method: 'DELETE',
+          headers: SECRET_HEADERS,
+        });
+        if (!resp.ok) {
+          toast('Delete failed', 'err');
+          return;
+        }
+        toast('Deleted');
+        refresh(true);
+      } catch (err) {
+        toast('Network error: ' + err.message, 'err');
+      }
     }
 
     let lastTurns = 0;
@@ -175,18 +308,19 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       const badge = document.getElementById('status-badge');
       const statusText = document.getElementById('status-text');
       try {
-        const [statsResp, recentResp] = await Promise.all([
-          fetch(ROOT + '/agent/stats', { cache: 'no-store' }),
-          fetch(ROOT + '/agent/recent?n=25', { cache: 'no-store' }),
+        const [statsResp, recentResp, corrResp] = await Promise.all([
+          api('/agent/stats'),
+          api('/agent/recent?n=25'),
+          api('/agent/corrections'),
         ]);
-        if (!statsResp.ok || !recentResp.ok) throw new Error('endpoint error');
+        if (!statsResp.ok || !recentResp.ok) throw new Error('stats endpoint error');
         const stats = await statsResp.json();
         const recent = await recentResp.json();
+        const corrections = corrResp.ok ? (await corrResp.json()).corrections || [] : [];
 
         badge.className = 'badge live';
         statusText.textContent = 'Live';
 
-        // Header sub
         document.getElementById('sub').textContent =
           'Uptime ' + fmtUptime(stats.uptime_ms || 0) +
           ' · Last refresh ' + new Date().toLocaleTimeString();
@@ -197,22 +331,18 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         document.getElementById('m-lat').textContent = fmtMs(stats.avg_latency_ms || 0);
         document.getElementById('m-err').textContent = fmtPct(stats.error_rate || 0);
         document.getElementById('m-err-n').textContent = stats.total_errors || 0;
-        document.getElementById('m-max').textContent = fmtPct(stats.maxed_rate || 0);
-        document.getElementById('m-max-n').textContent = stats.total_max_iter || 0;
+        document.getElementById('m-corr').textContent = corrections.length;
 
-        // Color-code metrics
         const errEl = document.getElementById('m-err');
         errEl.className = 'value ' + (stats.error_rate > 0.05 ? 'bad' : stats.error_rate > 0 ? 'warn' : 'ok');
-        const maxEl = document.getElementById('m-max');
-        maxEl.className = 'value ' + (stats.maxed_rate > 0.08 ? 'bad' : stats.maxed_rate > 0 ? 'warn' : 'ok');
         const latEl = document.getElementById('m-lat');
         latEl.className = 'value ' + (stats.avg_latency_ms > 20000 ? 'bad' : stats.avg_latency_ms > 15000 ? 'warn' : 'ok');
 
         // Alerts
         const alerts = [];
         if ((stats.error_rate || 0) > 0.05) alerts.push({ level: 'bad', text: 'Error rate above 5% — check recent failures below' });
-        if ((stats.maxed_rate || 0) > 0.08) alerts.push({ level: 'bad', text: 'Max-iteration rate above 8% — agent is hitting the tool-call cap too often' });
-        if ((stats.avg_latency_ms || 0) > 20000) alerts.push({ level: 'warn', text: 'Average latency above 20s — customers will feel lag' });
+        if ((stats.maxed_rate || 0) > 0.08) alerts.push({ level: 'bad', text: 'Max-iter rate above 8% — agent hitting tool-call cap too often' });
+        if ((stats.avg_latency_ms || 0) > 20000) alerts.push({ level: 'warn', text: 'Avg latency above 20s — customers will feel lag' });
         let toolCalls = 0, toolEmpty = 0;
         for (const [, t] of Object.entries(stats.by_tool || {})) {
           toolCalls += t.calls || 0;
@@ -221,40 +351,80 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         if (toolCalls > 10 && toolEmpty / toolCalls > 0.3) {
           alerts.push({ level: 'warn', text: Math.round(100 * toolEmpty / toolCalls) + '% of tool calls returned 0 results — search quality may be degrading' });
         }
-        const ab = document.getElementById('alerts');
-        ab.innerHTML = alerts.map(a => '<div class="alert-banner ' + (a.level === 'warn' ? 'warn' : '') + '"><span class="alert-title">ALERT</span>' + escapeHtml(a.text) + '</div>').join('');
+        document.getElementById('alerts').innerHTML = alerts
+          .map(a => '<div class="alert-banner ' + (a.level === 'warn' ? 'warn' : '') + '"><span class="alert-title">ALERT</span>' + esc(a.text) + '</div>')
+          .join('');
+
+        // Corrections list
+        const corrHtml = corrections.length === 0
+          ? '<div class="loading">No corrections yet. Click Flag next to a wrong turn below to teach the agent.</div>'
+          : corrections.slice().reverse().map(c => {
+              return '<div class="correction-item">' +
+                '<div class="row">' +
+                  '<div class="body">' +
+                    '<div class="ts-small">' + esc(fmtDateTime(c.ts)) + '</div>' +
+                    (c.user_msg ? '<div class="q"><span class="q-label">Customer:</span> ' + esc(c.user_msg) + '</div>' : '') +
+                    (c.wrong_reply ? '<div class="wrong-text">WRONG: ' + esc(c.wrong_reply) + '</div>' : '') +
+                    (c.correct_reply ? '<div class="correct-text">CORRECT: ' + esc(c.correct_reply) + '</div>' : '') +
+                    (c.note ? '<div class="q"><span class="q-label">Note:</span> ' + esc(c.note) + '</div>' : '') +
+                  '</div>' +
+                  '<button class="danger" onclick="deleteCorrection(\\'' + esc(c.id) + '\\')">Remove</button>' +
+                '</div>' +
+              '</div>';
+            }).join('');
+        document.getElementById('corrections-body').innerHTML = corrHtml;
 
         // Tool usage
         const toolRows = Object.entries(stats.by_tool || {}).sort((a, b) => b[1].calls - a[1].calls);
-        const toolsHtml = toolRows.length === 0
+        document.getElementById('tools-body').innerHTML = toolRows.length === 0
           ? '<tr><td colspan="4" class="loading">No tool calls yet</td></tr>'
           : toolRows.map(([name, s]) => {
               const hit = s.calls ? ((s.calls - s.zero_results) / s.calls * 100).toFixed(0) + '%' : '—';
               const hitClass = s.calls && (s.calls - s.zero_results) / s.calls > 0.7 ? 'status-ok' : 'status-max';
-              return '<tr><td class="mono">' + escapeHtml(name) + '</td><td style="text-align:right">' + s.calls + '</td><td style="text-align:right">' + s.zero_results + '</td><td style="text-align:right" class="' + hitClass + '">' + hit + '</td></tr>';
+              return '<tr><td class="mono">' + esc(name) + '</td><td style="text-align:right">' + s.calls + '</td><td style="text-align:right">' + s.zero_results + '</td><td style="text-align:right" class="' + hitClass + '">' + hit + '</td></tr>';
             }).join('');
-        document.getElementById('tools-body').innerHTML = toolsHtml;
 
-        // Recent turns
-        const recentHtml = (recent.turns || []).length === 0
-          ? '<tr><td colspan="7" class="loading">No turns yet — send a Telegram message to the bot</td></tr>'
-          : (recent.turns || []).map(t => {
+        // Build set of flagged keys from existing corrections (match by user_msg substring for approx)
+        const corrMsgs = new Set(corrections.map(c => (c.user_msg || '').trim()));
+
+        // Recent turns with flag button + inline form
+        const rows = recent.turns || [];
+        document.getElementById('recent-body').innerHTML = rows.length === 0
+          ? '<tr><td colspan="8" class="loading">No turns yet — send a Telegram message to the bot</td></tr>'
+          : rows.map(t => {
+              const key = turnKey(t);
               const status = t.error ? '<span class="status-err">ERR</span>' : t.maxed_out ? '<span class="status-max">MAX</span>' : '<span class="status-ok">OK</span>';
               const tools = (t.tool_calls || []).map(tc => {
                 const cls = (tc.count || 0) > 0 ? 'tool-pill hit' : 'tool-pill empty';
-                return '<span class="' + cls + '">' + escapeHtml(tc.name) + '(' + (tc.count || 0) + ')</span>';
+                return '<span class="' + cls + '">' + esc(tc.name) + '(' + (tc.count || 0) + ')</span>';
               }).join('') || '<span class="mono">—</span>';
-              return '<tr>' +
+              const isFlagged = corrMsgs.has((t.msg || '').trim()) || flaggedKeys.has(key);
+              const userAttr = esc(t.msg || '');
+              const replyAttr = esc(t.reply || '');
+              const keyAttr = esc(key);
+              return '<tr class="recent-row">' +
                 '<td class="ts">' + fmtTs(t.ts) + '</td>' +
                 '<td>' + status + '</td>' +
-                '<td class="mono">' + escapeHtml(t.language || '—') + '</td>' +
-                '<td class="text-cell" title="' + escapeHtml(t.msg) + '">' + escapeHtml(t.msg) + '</td>' +
+                '<td class="mono">' + esc(t.language || '—') + '</td>' +
+                '<td class="text-cell"><div class="text" title="' + userAttr + '">' + esc(t.msg) + '</div></td>' +
                 '<td>' + tools + '</td>' +
-                '<td class="text-cell" title="' + escapeHtml(t.reply) + '">' + escapeHtml((t.reply || '').slice(0, 140)) + '</td>' +
+                '<td class="text-cell"><div class="text" title="' + replyAttr + '">' + esc((t.reply || '').slice(0, 200)) + '</div></td>' +
                 '<td class="mono" style="text-align:right">' + fmtMs(t.latency_ms || 0) + '</td>' +
-              '</tr>';
+                '<td><button class="flag ' + (isFlagged ? 'flagged' : '') + '" data-key="' + keyAttr + '" onclick="toggleForm(\\'' + keyAttr.replace(/\\\\/g,'\\\\\\\\').replace(/\\'/g,"\\\\'") + '\\')">' + (isFlagged ? '✓ Flagged' : '⚑ Flag') + '</button></td>' +
+              '</tr>' +
+              '<tr><td colspan="8" style="padding: 0 16px;">' +
+                '<div class="correction-form ' + (openFormKey === key ? 'open' : '') + '" data-key="' + keyAttr + '">' +
+                  '<label>Correct reply (what the agent SHOULD have said)</label>' +
+                  '<textarea name="correct" placeholder="Write the reply you wanted the bot to give..."></textarea>' +
+                  '<label>Or just a note (e.g. \\"never say we do repairs\\")</label>' +
+                  '<textarea name="note" placeholder="Optional note to guide future replies"></textarea>' +
+                  '<div class="actions">' +
+                    '<button onclick="toggleForm(\\'' + keyAttr.replace(/\\\\/g,'\\\\\\\\').replace(/\\'/g,"\\\\'") + '\\')">Cancel</button>' +
+                    '<button class="primary" onclick=\\'submitCorrection("' + keyAttr.replace(/"/g,'&quot;') + '", ' + JSON.stringify(t.msg || '') + ', ' + JSON.stringify(t.reply || '') + ')\\'>Save correction</button>' +
+                  '</div>' +
+                '</div>' +
+              '</td></tr>';
             }).join('');
-        document.getElementById('recent-body').innerHTML = recentHtml;
 
         // Flash new turn indicator
         if (stats.total_turns > lastTurns && !manual && lastTurns > 0) {

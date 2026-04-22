@@ -11,6 +11,7 @@ import { closeRedis } from './modules/context.js';
 import { pingShopify } from './modules/shopify.js';
 import { getCatalog, catalogStatus } from './modules/catalog.js';
 import { snapshotMetrics, readRecentTurns } from './modules/agent-metrics.js';
+import { listCorrections, addCorrection, deleteCorrection } from './modules/corrections.js';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 
 const app = express();
@@ -67,6 +68,40 @@ router.get('/agent/stats', (_req, res) => {
 router.get('/agent/recent', (req, res) => {
   const n = Math.min(100, Math.max(1, parseInt(req.query.n, 10) || 25));
   res.json({ turns: readRecentTurns(n) });
+});
+
+// Corrections (owner feedback). Shares DASHBOARD_SECRET gate with the dashboard.
+function checkDashboardSecret(req, res) {
+  const expected = process.env.DASHBOARD_SECRET;
+  if (!expected) return true;
+  const got = req.get('x-dashboard-secret') || req.query.secret || '';
+  if (got !== expected) {
+    res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Invalid secret' } });
+    return false;
+  }
+  return true;
+}
+router.get('/agent/corrections', (req, res) => {
+  if (!checkDashboardSecret(req, res)) return;
+  res.json({ corrections: listCorrections() });
+});
+router.post('/agent/corrections', express.json(), (req, res) => {
+  if (!checkDashboardSecret(req, res)) return;
+  const { user_msg, wrong_reply, correct_reply, note } = req.body || {};
+  if (!user_msg && !wrong_reply && !correct_reply && !note) {
+    return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'empty correction' } });
+  }
+  try {
+    const row = addCorrection({ user_msg, wrong_reply, correct_reply, note });
+    res.json({ ok: true, correction: row });
+  } catch (err) {
+    res.status(500).json({ error: { code: 'INTERNAL', message: String(err?.message || err) } });
+  }
+});
+router.delete('/agent/corrections/:id', (req, res) => {
+  if (!checkDashboardSecret(req, res)) return;
+  const ok = deleteCorrection(req.params.id);
+  res.json({ ok });
 });
 
 // Monitoring dashboard. Gated by DASHBOARD_SECRET env var (optional).

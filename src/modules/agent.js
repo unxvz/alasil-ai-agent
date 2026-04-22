@@ -14,6 +14,7 @@ import { UpstreamError } from '../utils/errors.js';
 import { knowledgeBlock } from './knowledge.js';
 import { tools, executeTool } from '../tools/index.js';
 import { recordAgentTurn } from './agent-metrics.js';
+import { correctionsBlock } from './corrections.js';
 
 const client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
@@ -178,9 +179,12 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
       ? 'FINAL INSTRUCTION: The customer wrote in Arabic. Your ENTIRE reply MUST be in Arabic (Arabic script). English product names inside the reply are fine, but the surrounding sentences must be Arabic. Do not reply in English under any circumstance.'
       : 'FINAL INSTRUCTION: Reply in English only. Even if the customer used Finglish or transliterated Persian, you translate their intent and answer in English.';
 
+  const corrections = correctionsBlock();
+
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'system', content: knowledge },
+    ...(corrections ? [{ role: 'system', content: corrections }] : []),
     { role: 'system', content: contextBlock },
     { role: 'system', content: langDirective },
     { role: 'user', content: String(userMessage || '') },
