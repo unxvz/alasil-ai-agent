@@ -24,7 +24,8 @@ and policies supplied by the backend — never guess those.
 - Video: 4K Dolby Vision at 24/25/30/60/100/120 fps
 - Battery: up to 39 hours video playback
 - Connectivity: Wi-Fi 7 (802.11be), Bluetooth 6, 5G (sub-6 GHz + mmWave), Dual eSIM, Emergency SOS + Messages + Find My via satellite
-- Charging: 50% in 20 min with 40W adapter (wired); MagSafe wireless up to 25W
+- Charging (wired): 50% in ~20 min with the Apple 20W USB-C Power Adapter or higher
+- Charging (MagSafe): wireless up to 25W when using the Apple 30W USB-C Power Adapter (or higher)
 - Durability: IP68 (6 m up to 30 min)
 - In the box: iPhone 17 Pro Max, USB-C Charge Cable (1 m), Documentation
 - Colors / materials: Silver, Cosmic Orange, Deep Blue; aluminum unibody, Ceramic Shield 2 front, Ceramic Shield back
@@ -38,7 +39,8 @@ and policies supplied by the backend — never guess those.
 - Video: 4K Dolby Vision at 24/25/30/60/100/120 fps
 - Battery: up to 33 hours video playback
 - Connectivity: Wi-Fi 7, Bluetooth 6, 5G, Dual eSIM (two active eSIMs), Emergency SOS / Messages / roadside assistance via satellite
-- Charging: 50% in 20 min with 40W adapter; MagSafe wireless up to 25W
+- Charging (wired): 50% in ~20 min with 20W USB-C Power Adapter or higher
+- Charging (MagSafe): wireless up to 25W when using the Apple 30W USB-C Power Adapter (or higher)
 - Durability: IP68 (6 m up to 30 min)
 - In the box: iPhone 17 Pro, USB-C Charge Cable (1 m), Documentation
 - Colors / materials: Silver, Cosmic Orange, Deep Blue; aluminum unibody, Ceramic Shield 2 front, Ceramic Shield back
@@ -53,7 +55,8 @@ and policies supplied by the backend — never guess those.
 - Video: 4K Dolby Vision at 24/25/30/60 fps
 - Battery: up to 30 hours video playback
 - Connectivity: Wi-Fi 7, Bluetooth 6, 5G (sub-6 + mmWave), Dual eSIM, Emergency SOS / Messages / Find My via satellite
-- Charging: 50% in 20 min with 40W adapter; MagSafe wireless up to 25W
+- Charging (wired): 50% in ~20 min with 20W USB-C Power Adapter or higher
+- Charging (MagSafe): wireless up to 25W with the Apple 30W USB-C Power Adapter or higher
 - Durability: IP68 (6 m up to 30 min)
 - In the box: iPhone 17, USB-C Charge Cable (1 m), Documentation
 - Colors / materials: Black, White, Mist Blue, Sage, Lavender; aluminum design, color-infused glass back
@@ -68,7 +71,8 @@ and policies supplied by the backend — never guess those.
 - Front camera: 18MP Center Stage (f/1.9), 4K Dolby Vision video
 - Battery: up to 27 hours video playback; up to 40 hours with MagSafe Battery
 - Connectivity: Wi-Fi 7, Bluetooth 6, 5G, Dual eSIM, Emergency SOS / Messages via satellite
-- Charging: 50% in 30 min with 20W adapter; MagSafe wireless up to 20W
+- Charging (wired): 50% in ~30 min with 20W USB-C Power Adapter or higher
+- Charging (MagSafe): wireless up to 20W with the Apple 30W USB-C Power Adapter or higher
 - Durability: IP68 (6 m up to 30 min)
 - In the box: iPhone Air, USB-C Charge Cable (1 m), Documentation
 - Colors / materials: Space Black, Cloud White, Light Gold, Sky Blue; titanium design, Ceramic Shield 2 front + back
@@ -315,11 +319,32 @@ When the customer names an iPad, these are the ONLY Pencils that work:
 - "Which Pencil for iPad mini A17 Pro?" → Apple Pencil Pro (best) or Apple Pencil (USB-C).
 
 ## Charging compatibility quick reference
-- **MagSafe (iPhone):** all iPhone 12 and later — YES, supported. iPhone 15/16 MagSafe 15W. **iPhone Air supports MagSafe up to 20W.** iPhone 17 / 17 Pro / 17 Pro Max support MagSafe up to 25W. iPhone 17e supports MagSafe up to 20W.
+- **MagSafe (iPhone):** all iPhone 12 and later — YES, supported.
+  - iPhone 12 / 13 / 14 / 15 / 16 → MagSafe wireless up to 15W
+  - iPhone Air / iPhone 17e → MagSafe wireless up to 20W
+  - iPhone 17 / 17 Pro / 17 Pro Max → MagSafe wireless up to 25W
 - **Explicit Q&A:** "Does iPhone Air support MagSafe?" → **Yes, up to 20W.** Never answer "No" — all iPhone 12+ including iPhone Air support MagSafe.
-- **Fast charge 50% in 30 min:** requires 20W USB-C power adapter or higher.
+- **Fast charge (wired):** 50% in ~30 min on iPhone requires the 20W USB-C Power Adapter or higher.
 - **USB-C:** all iPhones 15, 16, 17, Air, and all iPads since late 2018. MacBooks use MagSafe 3 + Thunderbolt USB-C.
 - **Lightning:** iPhone 14 and older. No current Apple product still sold ships with Lightning except very old stock.
+
+### Apple Power Adapter lineup (what Apple actually sells — no 25W or 40W)
+Apple makes these wattages ONLY. If a customer asks for a "25W" or "40W"
+adapter, explain Apple does not make that wattage and recommend the closest one.
+
+| Apple power adapter        | Typical use                                                 |
+|----------------------------|-------------------------------------------------------------|
+| 20W USB-C                  | iPhone (wired fast charge), iPad entry, Apple Watch         |
+| 30W USB-C                  | Unlocks MagSafe 25W output, MacBook Air baseline, iPad Pro  |
+| 35W Dual USB-C             | Travel / two-device charging                                |
+| 67W USB-C                  | MacBook Pro 14" (M1/M2)                                     |
+| 70W USB-C                  | MacBook Pro 14" (M3/M4, M5 Pro 15-core)                     |
+| 96W USB-C                  | MacBook Pro 14" (M4 Pro/Max, M5 Pro 18-core, M5 Max)        |
+| 140W USB-C                 | MacBook Pro 16" (M1 Pro/Max, M3 Max, M4 Pro/Max, M5 Pro/Max) |
+
+- Apple does **NOT** make a 25W, 40W, 45W, 60W, 80W, 87W, or 100W power adapter.
+- The "25W" figure in iPhone MagSafe specs refers to the MagSafe wireless OUTPUT wattage,
+  not a 25W adapter — it's delivered by pairing a MagSafe Charger with a 30W Apple adapter (or higher).
 
 ---
 
@@ -399,10 +424,16 @@ Does NOT work with: iPad Pro M4/M5, iPad Air M2/M3/M4, iPad mini.
 - "Is my MagSafe charger the same as my old iPhone 12's?" → Physically yes (magnets) but newer iPhones can pull more power with a better adapter.
 
 ### MagSafe accessories (2026)
-- **MagSafe Charger** (1m/2m USB-C cable): works with all iPhone 12 and later, AirPods Pro 2/3 case, AirPods 4 (ANC), Apple Watch via separate charger.
+- **MagSafe Charger** (1m/2m USB-C cable): works with all iPhone 12 and later, AirPods Pro 2/3 case, AirPods 4 (ANC), Apple Watch via separate charger. Pair with a 30W USB-C Power Adapter to unlock 25W output on iPhone 17 line.
 - **MagSafe Duo**: discontinued.
 - **MagSafe Wallet (FineWoven → FineWoven replacement)**: fits all iPhone 12–17 with no case or with MagSafe-compatible case.
-- **MagSafe Battery**: works with iPhone 12 and later; Apple's new MagSafe Battery (2024) is 20W, compatible with iPhone 15 and newer, up to 40 hours with iPhone Air.
+- **MagSafe Battery**: works with iPhone 12 and later; Apple's new MagSafe Battery (2024), compatible with iPhone 15 and newer, up to 40 hours with iPhone Air.
+
+### Common adapter misconceptions
+- "Do you have a 25W adapter?" → **No, Apple does not make a 25W adapter.** The 25W figure is MagSafe's wireless output. Get the Apple 30W USB-C Power Adapter + a MagSafe Charger.
+- "Do you have a 40W adapter?" → **No, Apple does not make a 40W adapter.** For fast charging an iPhone, use the Apple 20W USB-C Power Adapter (or higher — 30W, 35W Dual, 67W, 70W, 96W, 140W).
+- "Which adapter for MacBook Pro 16?" → Apple 140W USB-C Power Adapter (ships with the device). For 14" M5 Pro/Max it is 96W.
+- "Which adapter for MacBook Air M5?" → Apple 30W USB-C Power Adapter (ships with the 256GB model); the 512GB+ model ships with the 35W Dual USB-C.
 
 ---
 
