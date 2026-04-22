@@ -12,6 +12,7 @@ const FILES = {
   apple_specs:         'apple_specs.md',
   apple_current_lineup:'apple_current_lineup.md',
   payment_methods:     'payment_methods.md',
+  catalog_taxonomy:    'catalog_taxonomy.md',
 };
 
 let _knowledge = null;
@@ -62,6 +63,10 @@ export function knowledgeBlock() {
   if (k.payment_methods?.trim()) {
     parts.push('\n=== PAYMENT METHODS REFERENCE ===');
     parts.push(k.payment_methods.trim());
+  }
+  if (k.catalog_taxonomy?.trim()) {
+    parts.push('\n=== CATALOG TAXONOMY (auto-generated from Shopify — use for orientation, not precise stock) ===');
+    parts.push(k.catalog_taxonomy.trim());
   }
   return parts.join('\n');
 }

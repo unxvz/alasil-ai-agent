@@ -331,6 +331,35 @@ function stripUrlsForMultiProduct(text, productCount) {
   return s.trim();
 }
 
+// Compute a "current focus" summary from the most recently shown products so
+// the LLM can resolve short follow-ups ("256?", "in silver?") against it.
+// Without this, the LLM sometimes drifts to a different family after a few turns.
+function computeFocus(lastProducts) {
+  const ps = Array.isArray(lastProducts) ? lastProducts.slice(0, 8) : [];
+  if (ps.length === 0) return null;
+
+  const uniq = (arr) => [...new Set(arr.filter((x) => x !== null && x !== undefined && x !== ''))];
+  const categories = uniq(ps.map((p) => p.category));
+  const families = uniq(ps.map((p) => p.family));
+  const variants = uniq(ps.map((p) => p.variant));
+  const chips = uniq(ps.map((p) => p.chip));
+  const storages = uniq(ps.map((p) => p.storage_gb));
+  const rams = uniq(ps.map((p) => p.ram_gb));
+  const colors = uniq(ps.map((p) => p.color));
+  const regions = uniq(ps.map((p) => p.region));
+
+  return {
+    categories,
+    families,
+    variants,
+    chips,
+    storages,
+    rams,
+    colors,
+    regions,
+  };
+}
+
 // Build the conversation context block the LLM sees AFTER the system prompt.
 function buildContextBlock({ history, lastProducts, language }) {
   const histText = (history || [])
@@ -348,7 +377,25 @@ function buildContextBlock({ history, lastProducts, language }) {
     )
     .join('\n');
 
+  const focus = computeFocus(lastProducts);
+  const focusLines = focus
+    ? [
+        `Category: ${focus.categories.join(', ') || '—'}`,
+        `Family:   ${focus.families.join(', ') || '—'}`,
+        `Variant:  ${focus.variants.join(', ') || '—'}`,
+        `Chip:     ${focus.chips.join(', ') || '—'}`,
+        `Storage:  ${focus.storages.join(', ') || '—'}`,
+        `Colors:   ${focus.colors.join(', ') || '—'}`,
+        `Region:   ${focus.regions.join(', ') || '—'}`,
+      ].join('\n')
+    : '(no focus yet — customer just started)';
+
   return [
+    '# CURRENT FOCUS',
+    '(This is what the customer has been discussing. Use it to disambiguate short follow-ups like "256?" or "in silver?" — they almost always refer to the family below.)',
+    '',
+    focusLines,
+    '',
     '# CONVERSATION HISTORY',
     histText || '(no prior turns)',
     '',
