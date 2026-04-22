@@ -10,6 +10,7 @@
 import { getCatalog, matchesFilter, distinctValues, enrichProduct } from '../modules/catalog.js';
 import { searchProducts as shopifyLiveSearch } from '../modules/shopify.js';
 import { addCorrection } from '../modules/corrections.js';
+import { webFetch, WEB_FETCH_KNOWN_TOPICS } from './web-fetch.js';
 import { logger } from '../logger.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -180,6 +181,29 @@ export const tools = [
   {
     type: 'function',
     function: {
+      name: 'webFetch',
+      description:
+        "Fetch an Apple reference page to verify a spec or compatibility fact that isn't covered in APPLE PRODUCT SPECS. Only fetches from a short allow-list: apple.com (incl. /ae/), support.apple.com, developer.apple.com, theapplewiki.com, gsmarena.com. Pass EITHER a full url OR a known topic shortcut. Results are cached for 24h. Use this sparingly — prefer the pre-loaded APPLE PRODUCT SPECS block when the fact is there.",
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description:
+              "Full URL on an allowed host. Example: 'https://support.apple.com/en-ae/108233'. Leave blank if using `topic`.",
+          },
+          topic: {
+            type: 'string',
+            description: 'Known-topic shortcut — preferred over raw URL for common questions.',
+            enum: WEB_FETCH_KNOWN_TOPICS,
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'saveCorrection',
       description:
         "Save a permanent correction AFTER you have verified (via another tool call or the knowledge base) that your previous reply was factually wrong and the customer is right. The correction is stored and injected into EVERY future agent system prompt, so the next time any customer asks the same question, the fix is automatic. Only call this when the customer's disagreement has been verified. Do NOT call it if the bot was actually correct.",
@@ -234,6 +258,9 @@ export async function executeTool(name, args) {
         break;
       case 'saveCorrection':
         result = await tool_saveCorrection(args || {});
+        break;
+      case 'webFetch':
+        result = await webFetch(args || {});
         break;
       default:
         return { error: `Unknown tool: ${name}` };
