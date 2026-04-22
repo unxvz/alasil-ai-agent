@@ -119,6 +119,14 @@ async function handleLegacy(msg, session, sessionId, userText) {
   logger.info({ sessionId, chatId, threadId, intent, confidence, responseType: resp.type, path: 'legacy' }, 'telegram reply');
 }
 
+// Map normalize.js language labels → agent language labels.
+// Agent speaks Arabic or English only; Persian/Finglish map to English.
+function agentLanguage(raw, text) {
+  // Arabic script in the message → reply Arabic
+  if (/[\u0600-\u06FF]/.test(String(text || ''))) return 'ar';
+  return 'en';
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Handler — LLM tool-calling agent
 // ────────────────────────────────────────────────────────────────────────────
@@ -127,7 +135,7 @@ async function handleAgent(msg, session, sessionId, userText) {
   const threadId = msg.message_thread_id;
 
   const { normalized, language } = normalize(userText);
-  session.language = language === 'mixed' ? (session.language || 'en') : language;
+  session.language = agentLanguage(language, userText);
 
   appendHistory(session, 'user', userText);
   await sendChatAction(chatId, 'typing', { threadId });
