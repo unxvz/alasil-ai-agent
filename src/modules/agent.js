@@ -121,11 +121,78 @@ IMPORTANT: saveCorrection is permanent. Only call it AFTER a real tool verified 
 - Plain text only. NO markdown (no **bold**, no italics, no headers, no tables).
 - NO emojis. NO decorative bullets (•, ◆, ▪).
 - Yes/No questions: START the reply with "Yes" or "No" matching the factual answer.
-- Length: 2–5 short lines. Mobile-friendly.
-- Listing 2+ products: format "1. Title — AED X,XXX" per line. NO URLs. End with a picking question.
-- Showing exactly 1 product (customer narrowed down or buy_confirm): include URL + 1 short closing line.
 - Never say "we only carry Apple" if a JBL/Bose/Dyson/Beats product IS in the tool results.
 - Never offer services we don't do (no repair, no trade-in, no buying used).
+
+# FORMATTING / PARAGRAPHING (CRITICAL — customers read on phone screens)
+
+- Break ideas onto SEPARATE LINES. Use a blank line between distinct thoughts.
+- NO run-on sentences. One idea per sentence. 15 words max per sentence.
+- When listing 3+ items, use a simple bullet list with each item on its own line:
+      - item 1
+      - item 2
+      - item 3
+  Do NOT inline 3+ items with commas ("256GB, 512GB, and 1TB"). Always list vertically.
+- Total reply: 2-5 lines of content, split across 1-3 short paragraphs.
+- Leave a blank line before the closing question so it stands out.
+
+BAD (run-on, hard to read):
+      Could you please specify which model of the iPhone Air you are interested in? We have different storage options available: 256GB, 512GB, and 1TB. Let me know, and I can provide more details!
+
+GOOD (broken up, scannable):
+      Which storage do you want?
+
+      - 256GB
+      - 512GB
+      - 1TB
+
+BAD:
+      We have the iPhone 17 Pro in 256GB Deep Blue for AED 5,139 and also 512GB Cosmic Orange for AED 5,499 if you want more storage, let me know which one.
+
+GOOD:
+      Two options in stock:
+
+      1. iPhone 17 Pro 256GB Deep Blue — AED 5,139
+      2. iPhone 17 Pro 512GB Cosmic Orange — AED 5,499
+
+      Which one suits you?
+
+# LISTING PRODUCTS (STRICT FORMAT — DO NOT DEVIATE)
+
+When listing 2 or more products:
+
+1. Max 3 products shown. If the tool returned more, pick the top 3 best matches
+   and add a line at the end like "We have more in stock — want me to narrow down?"
+2. ONE LINE per product. Format exactly: "N. <short title> — AED X,XXX"
+   - Short title = family + key spec (storage/variant/color), NOT the full catalog title.
+3. NO URLs, NO "View Product" links, NO multi-line bullets per product, NO chip/RAM/SSD
+   sub-lines. Pure "number. name — price" format.
+4. End with ONE closing question on its own line so the customer picks.
+
+GOOD format for 3 products:
+
+      Three options available:
+
+      1. MacBook Air M1 256GB Space Gray — AED 2,459
+      2. MacBook Air M2 256GB Starlight — AED 2,899
+      3. MacBook Air M3 512GB Silver — AED 3,915
+
+      Which one suits you?
+
+BAD (never do this):
+
+      Here are the MacBook options:
+
+      1. MacBook Neo 13-inch (2026)
+       - Apple A18 Pro chip with 6-core CPU
+       - 8GB RAM, 256GB SSD
+       - Color: Silver
+       - Price: AED 2,449
+       - View Product https://alasil.ae/products/...
+
+When showing exactly 1 product (customer narrowed down or buy_confirm):
+- Include the URL on its own line.
+- Add 1 short closing line ("Want me to place the order?").
 
 # LANGUAGE (STRICT — TWO OPTIONS ONLY)
 
@@ -177,6 +244,25 @@ function stripFormatting(text) {
   s = s.replace(/^[\s]*[•◆▪●○▶►]\s+/gm, '- ');
   s = s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}]/gu, '');
   s = s.replace(/[ \t]{2,}/g, ' ');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  return s.trim();
+}
+
+// Strip product URLs when the reply lists MULTIPLE products.
+// Model-side instructions don't always hold — this is the enforcement.
+// We keep any single trailing URL if the reply only shows one product.
+function stripUrlsForMultiProduct(text, productCount) {
+  if (productCount <= 1) return text;
+  let s = String(text || '');
+  // Remove "View Product https://..." lines entirely.
+  s = s.replace(/^\s*view\s*product[:\s]*https?:\/\/\S+\s*$/gim, '');
+  // Remove inline "... View Product https://..." fragments.
+  s = s.replace(/\s*view\s*product[:\s]*https?:\/\/\S+/gi, '');
+  // Remove standalone URLs that survive on their own line.
+  s = s.replace(/^\s*https?:\/\/\S+\s*$/gm, '');
+  // Remove trailing URL at end of a line ("... - AED 2,459 https://..." → "... - AED 2,459").
+  s = s.replace(/\s+https?:\/\/\S+/g, '');
+  // Collapse blank lines left by the removals.
   s = s.replace(/\n{3,}/g, '\n\n');
   return s.trim();
 }
@@ -263,7 +349,7 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
 
       // No tool call → this is the final assistant message.
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        const text = stripFormatting(msg.content || '');
+        const text = stripUrlsForMultiProduct(stripFormatting(msg.content || ''), collectedProducts.length);
         const latency = Date.now() - t0;
         logger.info(
           {
@@ -345,7 +431,10 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
         }),
       { retries: MAX_RETRIES, label: 'agent.final' }
     );
-    const text = stripFormatting(final.choices?.[0]?.message?.content || '');
+    const text = stripUrlsForMultiProduct(
+      stripFormatting(final.choices?.[0]?.message?.content || ''),
+      collectedProducts.length
+    );
     const latency = Date.now() - t0;
     logger.info(
       {
