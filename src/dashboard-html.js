@@ -83,7 +83,15 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .correction-form label { display: block; color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; margin: 8px 0 4px 0; }
   .correction-form textarea { width: 100%; min-height: 60px; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px; border-radius: 6px; font-family: inherit; font-size: 13px; resize: vertical; }
   .correction-form textarea:focus { outline: none; border-color: var(--accent); }
-  .correction-form .actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+  .correction-form .actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; flex-wrap: wrap; }
+  .correction-form .actions .left { margin-right: auto; }
+  .correction-form .gen-note { color: var(--text-dim); font-size: 11px; margin-top: 6px; font-style: italic; }
+  .correction-form .generated-badge { display: inline-block; padding: 2px 8px; background: rgba(88, 166, 255, 0.1); border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; margin-left: 6px; }
+  button.generate { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; }
+  button.generate:hover { background: #79b8ff; border-color: #79b8ff; color: #000; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(0,0,0,0.2); border-top-color: #000; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Corrections list */
   .correction-item { padding: 12px 16px; border-bottom: 1px solid var(--border); }
@@ -253,13 +261,54 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       });
     }
 
+    async function generateReply(key, userMsg, wrongReply, lang) {
+      const form = document.querySelector('.correction-form[data-key="' + CSS.escape(key) + '"]');
+      if (!form) return;
+      const whatWrong = form.querySelector('textarea[name=what_wrong]').value.trim();
+      if (!whatWrong) {
+        toast('First write WHY the reply was wrong — then I can generate the fix', 'err');
+        return;
+      }
+      const btn = form.querySelector('button.generate');
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Generating…';
+      try {
+        const resp = await api('/agent/corrections/generate', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, SECRET_HEADERS),
+          body: JSON.stringify({
+            user_msg: userMsg,
+            wrong_reply: wrongReply,
+            what_wrong: whatWrong,
+            language: lang || 'en',
+          }),
+        });
+        if (!resp.ok) {
+          const txt = await resp.text();
+          toast('Generate failed: ' + resp.status + ' ' + txt.slice(0, 80), 'err');
+          return;
+        }
+        const data = await resp.json();
+        const correctArea = form.querySelector('textarea[name=correct]');
+        correctArea.value = data.generated || '';
+        form.querySelector('.gen-note').style.display = 'block';
+        toast('Generated — review and edit before saving');
+      } catch (err) {
+        toast('Network error: ' + err.message, 'err');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
     async function submitCorrection(key, userMsg, wrongReply) {
       const form = document.querySelector('.correction-form[data-key="' + CSS.escape(key) + '"]');
       if (!form) return;
       const correct = form.querySelector('textarea[name=correct]').value.trim();
-      const note = form.querySelector('textarea[name=note]').value.trim();
+      const note = form.querySelector('textarea[name=what_wrong]').value.trim();
       if (!correct && !note) {
-        toast('Add either a correct reply or a note', 'err');
+        toast('Write what was wrong, generate a reply, or type one yourself', 'err');
         return;
       }
       try {
@@ -277,7 +326,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         flaggedKeys.add(key);
         openFormKey = null;
         form.querySelector('textarea[name=correct]').value = '';
-        form.querySelector('textarea[name=note]').value = '';
+        form.querySelector('textarea[name=what_wrong]').value = '';
         refresh(true);
       } catch (err) {
         toast('Network error: ' + err.message, 'err');
@@ -414,12 +463,16 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
               '</tr>' +
               '<tr><td colspan="8" style="padding: 0 16px;">' +
                 '<div class="correction-form ' + (openFormKey === key ? 'open' : '') + '" data-key="' + keyAttr + '">' +
-                  '<label>Correct reply (what the agent SHOULD have said)</label>' +
-                  '<textarea name="correct" placeholder="Write the reply you wanted the bot to give..."></textarea>' +
-                  '<label>Or just a note (e.g. \\"never say we do repairs\\")</label>' +
-                  '<textarea name="note" placeholder="Optional note to guide future replies"></textarea>' +
+                  '<label>What was wrong with the reply</label>' +
+                  '<textarea name="what_wrong" placeholder="Describe the mistake. e.g. \\"we carry Bose — dont say we dont\\", \\"UAE iPhones dont have FaceTime\\", \\"iPad Air M4 uses Apple Pencil Pro only\\"..."></textarea>' +
+                  '<label>Correct reply (click Generate to draft, then edit)' +
+                    '<span class="generated-badge" style="display:none" id="gen-badge-' + keyAttr.replace(/[^a-z0-9]/gi,'') + '">AI draft</span>' +
+                  '</label>' +
+                  '<textarea name="correct" placeholder="Leave empty and click Generate — or type the reply yourself..."></textarea>' +
+                  '<div class="gen-note" style="display:none">AI-generated based on your feedback. Review and edit before saving.</div>' +
                   '<div class="actions">' +
-                    '<button onclick="toggleForm(\\'' + keyAttr.replace(/\\\\/g,'\\\\\\\\').replace(/\\'/g,"\\\\'") + '\\')">Cancel</button>' +
+                    '<button class="left" onclick="toggleForm(\\'' + keyAttr.replace(/\\\\/g,'\\\\\\\\').replace(/\\'/g,"\\\\'") + '\\')">Cancel</button>' +
+                    '<button class="generate" onclick=\\'generateReply("' + keyAttr.replace(/"/g,'&quot;') + '", ' + JSON.stringify(t.msg || '') + ', ' + JSON.stringify(t.reply || '') + ', ' + JSON.stringify(t.language || 'en') + ')\\'>✨ Generate</button>' +
                     '<button class="primary" onclick=\\'submitCorrection("' + keyAttr.replace(/"/g,'&quot;') + '", ' + JSON.stringify(t.msg || '') + ', ' + JSON.stringify(t.reply || '') + ')\\'>Save correction</button>' +
                   '</div>' +
                 '</div>' +

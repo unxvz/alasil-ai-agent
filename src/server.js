@@ -12,6 +12,7 @@ import { pingShopify } from './modules/shopify.js';
 import { getCatalog, catalogStatus } from './modules/catalog.js';
 import { snapshotMetrics, readRecentTurns } from './modules/agent-metrics.js';
 import { listCorrections, addCorrection, deleteCorrection } from './modules/corrections.js';
+import { generateCorrectReply } from './modules/correction-generator.js';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 
 const app = express();
@@ -102,6 +103,22 @@ router.delete('/agent/corrections/:id', (req, res) => {
   if (!checkDashboardSecret(req, res)) return;
   const ok = deleteCorrection(req.params.id);
   res.json({ ok });
+});
+
+// Generate the suggested correct reply for a flagged turn (calls OpenAI).
+router.post('/agent/corrections/generate', express.json(), async (req, res) => {
+  if (!checkDashboardSecret(req, res)) return;
+  const { user_msg, wrong_reply, what_wrong, note, language } = req.body || {};
+  if (!user_msg) {
+    return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'user_msg is required' } });
+  }
+  try {
+    const generated = await generateCorrectReply({ user_msg, wrong_reply, what_wrong, note, language });
+    res.json({ ok: true, generated });
+  } catch (err) {
+    logger.error({ err: String(err?.message || err) }, 'generate correct reply failed');
+    res.status(500).json({ error: { code: 'GENERATOR_FAILED', message: String(err?.message || err) } });
+  }
 });
 
 // Monitoring dashboard. Gated by DASHBOARD_SECRET env var (optional).
