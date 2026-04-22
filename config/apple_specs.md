@@ -481,8 +481,43 @@ So: any iPhone 6s or newer, any iPad released since 2013, any Mac from 2012+.
 - **Older Apple Watches** (Series 9, Ultra 2 etc): work with iPhone Xs or newer.
 - A customer with an iPhone 8 or older cannot pair a current Apple Watch.
 
+---
+
+## iPhone color names — OFFICIAL list per model (authoritative)
+
+Customer-facing replies about iPhone colors MUST use one of these exact names.
+Never invent colors. Never call a 17 Pro color "Natural Titanium" — that is
+an iPhone 15/16 Pro color, not 17 Pro.
+
+| Model              | Body material | Official colors                                    |
+|--------------------|---------------|----------------------------------------------------|
+| iPhone 17 Pro Max  | **Aluminum**  | Silver, Cosmic Orange, Deep Blue                   |
+| iPhone 17 Pro      | **Aluminum**  | Silver, Cosmic Orange, Deep Blue                   |
+| iPhone 17          | Aluminum      | Black, White, Mist Blue, Sage, Lavender            |
+| iPhone Air         | **Titanium**  | Space Black, Cloud White, Light Gold, Sky Blue     |
+| iPhone 17e         | Aluminum      | Black, White, Soft Pink                            |
+| iPhone 16 Pro Max  | **Titanium**  | Black Titanium, White Titanium, Natural Titanium, Desert Titanium |
+| iPhone 16 Pro      | **Titanium**  | Black Titanium, White Titanium, Natural Titanium, Desert Titanium |
+| iPhone 16 Plus     | Aluminum      | Black, White, Pink, Teal, Ultramarine              |
+| iPhone 16          | Aluminum      | Black, White, Pink, Teal, Ultramarine              |
+| iPhone 16e         | Aluminum      | Black, White                                       |
+| iPhone 15 Pro Max  | **Titanium**  | Natural Titanium, Blue Titanium, White Titanium, Black Titanium |
+| iPhone 15 Pro      | **Titanium**  | Natural Titanium, Blue Titanium, White Titanium, Black Titanium |
+
+IMPORTANT: Some product titles in alAsil's Shopify say things like
+"Apple iPhone 17 Pro Max 256GB Deep Blue **Titanium**" — ignore the word
+"Titanium" in those titles. **iPhone 17 Pro line is ALUMINUM.** The Shopify
+title is legacy wording from the 15/16 Pro line. The correct customer-facing
+answer is just "Deep Blue" for iPhone 17 Pro Max.
+
+When the customer asks "what colors?" and you need to verify, call
+`getAvailableOptions(color, {family:"iPhone 17", variant:"Pro Max"})` —
+it returns the colors actually in stock, which will be a subset of the
+official colors above.
+
 ## Rules for using this file
 - Quote values verbatim from the spec list above — do not paraphrase chip/core/camera numbers.
 - Do NOT quote prices from here — Apple doesn't publish pricing on specs pages. alAsil's price comes from our own product data.
 - If the customer asks a spec NOT in this file, say so honestly and escalate.
 - Region-specific availability (UAE / Middle East vs International) is tracked in policies.md — not here.
+- **For iPhone colors, ALWAYS use the official Apple color names from the table above, not the Shopify title wording.**

@@ -59,15 +59,17 @@ async function main() {
   const inStock = catalog.filter((p) => p.in_stock !== false);
   console.log(`Loaded ${catalog.length} total (${inStock.length} in stock).`);
 
-  // Group by category → family → variant
+  // Group by category → model_key (the new canonical per-model-line identifier).
+  // This keeps iPhone 17 Pro and iPhone 17 Pro Max as separate groups instead
+  // of rolling them up into a single "iPhone 17" family with mixed variants.
   const byCategory = new Map();
   for (const p of inStock) {
     const cat = p.category || 'Unknown';
     if (!byCategory.has(cat)) byCategory.set(cat, new Map());
-    const fam = p.family || '(no family)';
-    const famMap = byCategory.get(cat);
-    if (!famMap.has(fam)) famMap.set(fam, []);
-    famMap.get(fam).push(p);
+    const key = p.model_key || p.family || '(no family)';
+    const modelMap = byCategory.get(cat);
+    if (!modelMap.has(key)) modelMap.set(key, []);
+    modelMap.get(key).push(p);
   }
 
   // Tag frequency

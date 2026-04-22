@@ -56,7 +56,7 @@ function _enrichProduct(p) {
   const storage_gb = detectStorage(norm);
   const ram_gb = detectRam(norm);
   const screen_inch = detectScreen(norm);
-  const color = detectColor(title);
+  const rawColor = detectColor(title);
   const region = detectRegion(norm);
   const sim = detectSim(norm);
   const keyboard_layout = detectKeyboard(norm);
@@ -66,23 +66,195 @@ function _enrichProduct(p) {
     : category === 'Mac'  ? chip
     : null;
 
+  // New fields
+  const material = detectMaterial(category, family);
+  const year = detectYear(category, family, chip);
+  const generation = detectGeneration(category, family, variant);
+  const color = normalizeColor(rawColor, material);
+
+  // Canonical model_key: a stable "which exact phone model is this" label.
+  // Customer can ask for any of these and the bot knows what to filter on.
+  // For iPhone: "iPhone 17 Pro Max", "iPhone 17 Pro", "iPhone 17", "iPhone Air", "iPhone 17e"
+  // For iPad: "iPad Pro (M5)", "iPad Air (M4)", "iPad mini (A17 Pro)", "iPad (A16)"
+  // For Mac: "MacBook Air (M5)", "MacBook Pro 14 (M5 Pro)", etc.
+  // For Apple Watch: "Apple Watch Series 11", "Apple Watch Ultra 3", etc.
+  const model_key = buildModelKey({ category, family, variant, chip, screen_inch });
+
+  // Canonical category_path: "iPhone > iPhone 17 Pro Max > 256GB > Deep Blue"
+  // Gives LLM a deterministic breadcrumb so it can map any customer phrase
+  // to exactly one product group.
+  const category_path = buildCategoryPath({ category, model_key, storage_gb, color, region });
+
   return {
     ...p,
     category,
     family,
     model,
+    model_key,
     variant,
     chip,
     storage_gb,
     ram_gb,
     screen_inch,
     color,
+    raw_color: rawColor,
     region,
     sim,
     keyboard_layout,
     connectivity,
+    material,
+    year,
+    generation,
+    category_path,
     features: { storage_gb, ram_gb, screen_inch },
   };
+}
+
+// Build a human-readable "model_key" that uniquely identifies the phone/ipad/mac/watch
+// line, separate from variants-within-line (storage, color, region, etc).
+function buildModelKey({ category, family, variant, chip, screen_inch }) {
+  if (!family) return null;
+  if (category === 'iPhone') {
+    // Merge family + variant — "iPhone 17" + "Pro Max" → "iPhone 17 Pro Max"
+    if (!variant || variant === 'Standard' || variant === 'Air') return family;
+    return `${family} ${variant}`;
+  }
+  if (category === 'iPad') {
+    if (chip) return `${family} (${chip})`;
+    return family;
+  }
+  if (category === 'Mac') {
+    if (screen_inch && chip) return `${family} ${screen_inch}" (${chip})`;
+    if (chip) return `${family} (${chip})`;
+    return family;
+  }
+  if (category === 'Apple Watch') {
+    return family; // e.g. "Apple Watch Series 11"
+  }
+  if (category === 'AirPods') {
+    return family; // "AirPods 4", "AirPods Pro 3", etc.
+  }
+  return family;
+}
+
+function buildCategoryPath({ category, model_key, storage_gb, color, region }) {
+  const parts = [];
+  if (category) parts.push(category);
+  if (model_key && model_key !== category) parts.push(model_key);
+  if (storage_gb) {
+    parts.push(storage_gb >= 1024 ? `${Math.round(storage_gb / 1024)}TB` : `${storage_gb}GB`);
+  }
+  if (color) parts.push(color);
+  if (region) parts.push(region);
+  return parts.join(' > ');
+}
+
+// Normalize color names so catalog strings like "Deep Blue Titanium" (inherited
+// from iPhone 15/16 Pro legacy titling) get reduced to "Deep Blue" when the
+// phone body is actually aluminum. Keeps the raw value available via raw_color.
+function normalizeColor(raw, material) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  // Strip a trailing material suffix if it disagrees with the actual material.
+  // We do this conservatively — only strip "Titanium"/"Aluminum"/"Ceramic" when
+  // the product's detected material is DIFFERENT or UNKNOWN, to avoid breaking
+  // colors whose proper name includes the material (e.g. "Natural Titanium"
+  // on iPhone 15/16 Pro, where the body really is titanium).
+  const suffix = /\s+(Titanium|Aluminum|Aluminium|Ceramic)\s*$/i;
+  const hasSuffix = suffix.test(s);
+  if (!hasSuffix) return s;
+  const claimed = s.match(suffix)[1].toLowerCase();
+  if (material && material !== claimed) {
+    return s.replace(suffix, '').trim();
+  }
+  return s;
+}
+
+// Body material by product family. When Apple changes materials between
+// generations (iPhone 15/16 Pro = titanium; iPhone 17 Pro = back to aluminum),
+// this lets the bot correct misleading product titles.
+function detectMaterial(category, family) {
+  if (category === 'iPhone') {
+    // iPhone 17 Pro / Pro Max: aluminum unibody
+    if (/iPhone\s*17(\s*Pro(\s*Max)?)?$/i.test(family || '')) return 'aluminum';
+    // iPhone 17 standard: aluminum
+    if (/^iPhone\s*17$/i.test(family || '')) return 'aluminum';
+    // iPhone Air: titanium
+    if (/iPhone\s*Air/i.test(family || '')) return 'titanium';
+    // iPhone 17e: aluminum
+    if (/iPhone\s*17e/i.test(family || '')) return 'aluminum';
+    // iPhone 16 Pro / 15 Pro: titanium
+    if (/iPhone\s*(15|16)\s*Pro/i.test(family || '')) return 'titanium';
+    // iPhone 16 / 15 standard: aluminum
+    if (/iPhone\s*(15|16)$/i.test(family || '')) return 'aluminum';
+    return null;
+  }
+  if (category === 'Apple Watch') {
+    if (/Ultra/i.test(family || '')) return 'titanium';
+    if (/Series\s*11/i.test(family || '')) return 'aluminum'; // also titanium option — noted in specs
+    return null;
+  }
+  if (category === 'iPad') {
+    return 'aluminum'; // all current iPads
+  }
+  if (category === 'Mac') {
+    return 'aluminum';
+  }
+  return null;
+}
+
+// Release year by family or chip, best-effort.
+function detectYear(category, family, chip) {
+  const fam = String(family || '');
+  const ch = String(chip || '');
+  if (category === 'iPhone') {
+    if (/iPhone\s*17(?:\s*Pro)?/i.test(fam) || /iPhone\s*Air/i.test(fam)) return 2025;
+    if (/iPhone\s*17e/i.test(fam)) return 2026;
+    if (/iPhone\s*16/i.test(fam)) return 2024;
+    if (/iPhone\s*15/i.test(fam)) return 2023;
+    if (/iPhone\s*14/i.test(fam)) return 2022;
+    if (/iPhone\s*13/i.test(fam)) return 2021;
+  }
+  if (category === 'iPad') {
+    if (/iPad\s*Pro/i.test(fam) && /M5/i.test(ch)) return 2025;
+    if (/iPad\s*Pro/i.test(fam) && /M4/i.test(ch)) return 2024;
+    if (/iPad\s*Air/i.test(fam) && /M4/i.test(ch)) return 2026;
+    if (/iPad\s*Air/i.test(fam) && /M3/i.test(ch)) return 2025;
+    if (/iPad\s*Air/i.test(fam) && /M2/i.test(ch)) return 2024;
+    if (/iPad\s*mini/i.test(fam)) return 2024;
+  }
+  if (category === 'Mac') {
+    if (/M5/i.test(ch)) return 2026;
+    if (/M4/i.test(ch)) return 2024;
+    if (/M3/i.test(ch)) return 2023;
+    if (/M2/i.test(ch)) return 2022;
+    if (/M1/i.test(ch)) return 2020;
+  }
+  if (category === 'Apple Watch') {
+    if (/Series\s*11|Ultra\s*3|SE\s*3/i.test(fam)) return 2025;
+    if (/Series\s*10|Ultra\s*2/i.test(fam)) return 2024;
+  }
+  return null;
+}
+
+// Generation — usually the number in the family name (e.g. "iPhone 17" → "17").
+function detectGeneration(category, family, variant) {
+  const fam = String(family || '');
+  if (category === 'iPhone') {
+    const m = fam.match(/iPhone\s*(\d{1,2})e?/i);
+    if (m) return m[1] + (fam.endsWith('e') ? 'e' : '');
+    if (/iPhone\s*Air/i.test(fam)) return 'Air';
+    if (/iPhone\s*SE/i.test(fam)) return 'SE';
+  }
+  if (category === 'Apple Watch') {
+    const m = fam.match(/(Series|SE|Ultra)\s*(\d+)/i);
+    if (m) return `${m[1]} ${m[2]}`;
+  }
+  if (category === 'AirPods') {
+    const m = fam.match(/AirPods\s*(?:Pro|Max)?\s*(\d+)/i);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 function normalizeTitle(t) {
@@ -333,9 +505,15 @@ const KNOWN_COLORS = [
 ].sort((a, b) => b.length - a.length);
 
 function detectColor(title) {
+  // Split camelCase ("SkyBlue" → "Sky Blue", "CloudWhite" → "Cloud White")
+  // and normalize whitespace so we catch color names even when the Shopify
+  // product title runs words together.
+  const split = String(title || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ');
   for (const c of KNOWN_COLORS) {
     const safe = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`\\b${safe}\\b`, 'i').test(title)) {
+    if (new RegExp(`\\b${safe}\\b`, 'i').test(split)) {
       return c.replace(/\b\w/g, (m) => m.toUpperCase());
     }
   }

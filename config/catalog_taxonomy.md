@@ -101,22 +101,38 @@ Colors: Midnight, White
 
 ## Mac
 
-### MacBook Air (44 SKUs)
-Price range: AED 2,459 – AED 6,939
-Chips: M1, M2, M3, M4, M5
-Storage: 256GB, 512GB, 1TB
-RAM: 8GB, 16GB, 24GB
-Screen: 13", 13.6", 15", 15.3"
-Colors: Gold, Midnight, Silver, Sky Blue, Space Gray, Starlight
+### MacBook Air 13" (M5) (12 SKUs)
+Price range: AED 4,025 – AED 5,675
+Chips: M5
+Storage: 512GB, 1TB
+RAM: 16GB, 24GB
+Screen: 13"
+Colors: Midnight, Silver, Sky Blue, Starlight
+
+### MacBook Air 15" (M5) (12 SKUs)
+Price range: AED 4,895 – AED 6,939
+Chips: M5
+Storage: 512GB, 1TB
+RAM: 16GB, 24GB
+Screen: 15"
+Colors: Midnight, Silver, Sky Blue, Starlight
+
+### MacBook Air 15.3" (M4) (8 SKUs)
+Price range: AED 4,165 – AED 5,545
+Chips: M4
+Storage: 256GB, 512GB
+RAM: 16GB, 24GB
+Screen: 15.3"
+Colors: Midnight, Silver, Sky Blue, Starlight
 Keyboard: English
 
-### MacBook Pro (25 SKUs)
-Price range: AED 4,025 – AED 17,829
-Chips: M3, M3 Pro, M5, M5 Max, M5 Pro
-Storage: 512GB, 1TB, 2TB
-RAM: 8GB, 16GB, 18GB, 24GB, 32GB, 36GB, 48GB
-Screen: 14", 16"
-Colors: Silver, Space Black, Space Gray
+### MacBook Pro 14" (M5) (7 SKUs)
+Price range: AED 5,999 – AED 7,939
+Chips: M5
+Storage: 512GB, 1TB
+RAM: 16GB, 24GB, 32GB
+Screen: 14"
+Colors: Silver, Space Black
 Keyboard: English
 
 ### (no family) (7 SKUs)
@@ -126,7 +142,58 @@ RAM: 8GB
 Screen: 13"
 Colors: Silver
 
-### iMac (3 SKUs)
+### MacBook Air 13.6" (M4) (6 SKUs)
+Price range: AED 3,949 – AED 5,219
+Chips: M4
+Storage: 256GB, 512GB
+RAM: 16GB, 24GB
+Screen: 13.6"
+Colors: Midnight, Silver, Sky Blue, Starlight
+Keyboard: English
+
+### MacBook Pro 14" (M5 Pro) (4 SKUs)
+Price range: AED 8,479 – AED 11,089
+Chips: M5 Pro
+Storage: 1TB, 2TB
+RAM: 24GB
+Screen: 14"
+Colors: Silver, Space Black
+
+### MacBook Pro 16" (M5 Pro) (4 SKUs)
+Price range: AED 10,385 – AED 12,505
+Chips: M5 Pro
+Storage: 1TB
+RAM: 24GB, 48GB
+Screen: 16"
+Colors: Silver, Space Black
+
+### MacBook Pro 16" (M5 Max) (4 SKUs)
+Price range: AED 15,655 – AED 17,829
+Chips: M5 Max
+Storage: 2TB
+RAM: 36GB, 48GB
+Screen: 16"
+Colors: Silver, Space Black
+
+### MacBook Pro 14" (M3) (3 SKUs)
+Price range: AED 4,025 – AED 4,479
+Chips: M3
+Storage: 512GB, 1TB
+RAM: 8GB
+Screen: 14"
+Colors: Silver, Space Gray
+Keyboard: English
+
+### MacBook Air 13" (M1) (3 SKUs)
+Price range: AED 2,459 – AED 2,719
+Chips: M1
+Storage: 256GB
+RAM: 8GB
+Screen: 13"
+Colors: Gold, Silver, Space Gray
+Keyboard: English
+
+### iMac 24" (M4) (3 SKUs)
 Price range: AED 5,979 – AED 7,609
 Chips: M4
 Storage: 256GB, 512GB
@@ -134,13 +201,57 @@ RAM: 16GB, 24GB
 Screen: 24"
 Colors: Blue, Pink, Silver
 
-### Mac mini (1 SKUs)
+### MacBook Pro 14" (M5 Max) (2 SKUs)
+Price range: AED 14,459
+Chips: M5 Max
+Storage: 2TB
+RAM: 36GB
+Screen: 14"
+Colors: Silver, Space Black
+
+### Mac mini (M2) (1 SKUs)
 Price range: AED 1,745
 Chips: M2
 Storage: 512GB
 RAM: 8GB
 
-### Mac Studio (1 SKUs)
+### MacBook Pro 14" (M3 Pro) (1 SKUs)
+Price range: AED 6,775
+Chips: M3 Pro
+Storage: 1TB
+RAM: 18GB
+Screen: 14"
+Colors: Space Black
+Keyboard: English
+
+### MacBook Air 15" (M2) (1 SKUs)
+Price range: AED 3,479
+Chips: M2
+Storage: 256GB
+RAM: 8GB
+Screen: 15"
+Colors: Space Gray
+Keyboard: English
+
+### MacBook Air 13.6" (M2) (1 SKUs)
+Price range: AED 3,265
+Chips: M2
+Storage: 256GB
+RAM: 8GB
+Screen: 13.6"
+Colors: Starlight
+Keyboard: English
+
+### MacBook Air 13.6" (M3) (1 SKUs)
+Price range: AED 3,915
+Chips: M3
+Storage: 512GB
+RAM: 24GB
+Screen: 13.6"
+Colors: Silver
+Keyboard: English
+
+### Mac Studio (M4 Max) (1 SKUs)
 Price range: AED 8,479
 Chips: M4 Max
 Storage: 512GB
@@ -154,20 +265,28 @@ Colors: Black, Blue, Red
 
 ## iPad
 
-### iPad Air (39 SKUs)
-Price range: AED 2,015 – AED 3,699
-Chips: M2, M3, M4
-Storage: 128GB, 256GB, 512GB, 1TB
+### iPad Air (M4) (19 SKUs)
+Price range: AED 2,199 – AED 3,699
+Chips: M4
+Storage: 128GB, 256GB
 Screen: 11", 13"
 Colors: Blue, Purple, Space Gray, Starlight
 Connectivity: Wi-Fi, Wi-Fi + Cellular
 
-### iPad Pro (22 SKUs)
+### iPad Pro (M5) (18 SKUs)
 Price range: AED 3,589 – AED 7,175
-Chips: M4, M5
+Chips: M5
 Storage: 256GB, 512GB, 1TB, 2TB
 Screen: 11", 13"
 Colors: Silver, Space Black
+Connectivity: Wi-Fi, Wi-Fi + Cellular
+
+### iPad Air (M3) (11 SKUs)
+Price range: AED 2,015 – AED 3,349
+Chips: M3
+Storage: 128GB, 256GB
+Screen: 11", 13"
+Colors: Blue, Purple, Space Gray, Starlight
 Connectivity: Wi-Fi, Wi-Fi + Cellular
 
 ### iPad (10 SKUs)
@@ -175,6 +294,22 @@ Price range: AED 1,255 – AED 2,395
 Storage: 64GB, 128GB, 256GB
 Screen: 10.9"
 Colors: Blue, Pink, Silver, Yellow
+Connectivity: Wi-Fi, Wi-Fi + Cellular
+
+### iPad Air (M2) (9 SKUs)
+Price range: AED 2,395 – AED 2,829
+Chips: M2
+Storage: 512GB, 1TB
+Screen: 11"
+Colors: Blue, Purple, Space Gray, Starlight
+Connectivity: Wi-Fi, Wi-Fi + Cellular
+
+### iPad Pro (M4) (4 SKUs)
+Price range: AED 3,809 – AED 4,459
+Chips: M4
+Storage: 256GB, 512GB
+Screen: 11", 13"
+Colors: Silver, Space Black
 Connectivity: Wi-Fi, Wi-Fi + Cellular
 
 ### iPad mini (3 SKUs)
@@ -186,28 +321,51 @@ Connectivity: Wi-Fi
 
 ## iPhone
 
-### iPhone 17 (78 SKUs)
-Price range: AED 2,995 – AED 8,685
-Variants: Standard, Pro, Pro Max
+### iPhone 17 Pro Max (31 SKUs)
+Price range: AED 5,149 – AED 8,685
+Variants: Pro Max
 Storage: 256GB, 512GB, 1TB, 2TB
-Colors: Black, Cosmic Orange, Deep Blue Titanium, Lavender, Mist Blue, Sage, Silver, White
+Colors: Cosmic Orange, Deep Blue, Silver
 Regions: Middle East, International
 SIM: Dual eSIM, Nano SIM + eSIM
 
-### iPhone 16 (17 SKUs)
-Price range: AED 2,665 – AED 3,385
-Variants: Standard, Plus
-Storage: 128GB, 256GB
-Colors: Black, Pink, White
-Regions: International
+### iPhone 17 (25 SKUs)
+Price range: AED 2,995 – AED 4,219
+Variants: Standard
+Storage: 256GB, 512GB
+Colors: Black, Lavender, Mist Blue, Sage, White
+Regions: Middle East, International
+SIM: Dual eSIM, Nano SIM + eSIM
+
+### iPhone 17 Pro (22 SKUs)
+Price range: AED 4,719 – AED 6,579
+Variants: Pro
+Storage: 256GB, 512GB, 1TB
+Colors: Cosmic Orange, Deep Blue, Silver
+Regions: Middle East, International
+SIM: Dual eSIM, Nano SIM + eSIM
 
 ### iPhone Air (13 SKUs)
 Price range: AED 3,375 – AED 4,949
 Variants: Air
 Storage: 256GB, 512GB, 1TB
-Colors: Cloud White, Light Gold, Space Black
+Colors: Cloud White, Light Gold, Sky Blue, Space Black
 Regions: Middle East, International
 SIM: Dual eSIM
+
+### iPhone 16 Plus (9 SKUs)
+Price range: AED 3,155 – AED 3,385
+Variants: Plus
+Storage: 128GB, 256GB
+Colors: Black, Pink, White
+Regions: International
+
+### iPhone 16 (8 SKUs)
+Price range: AED 2,665 – AED 3,069
+Variants: Standard
+Storage: 128GB, 256GB
+Colors: Black, Pink, White
+Regions: International
 
 ### iPhone 15 (5 SKUs)
 Price range: AED 2,395 – AED 2,829

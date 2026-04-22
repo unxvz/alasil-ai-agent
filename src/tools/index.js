@@ -106,6 +106,24 @@ export const tools = [
   {
     type: 'function',
     function: {
+      name: 'browseMenu',
+      description:
+        "Step-by-step menu navigation — returns the next level of choices given what the customer has specified so far. Use this when the customer gives a broad hint ('iphone') and you need to walk them through the decision tree (model → storage → color → region). Returns a list of the next-level options that actually have in-stock SKUs. Much cleaner than raw searchProducts when the customer is still narrowing.",
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', description: 'Top-level category, e.g. iPhone, iPad, Mac, Apple Watch.' },
+          model_key: { type: 'string', description: 'Exact model line — "iPhone 17 Pro Max", "iPad Pro (M5)", "MacBook Air (M5)", "Apple Watch Series 11".' },
+          storage_gb: { type: 'number' },
+          color: { type: 'string' },
+          region: { type: 'string', enum: ['Middle East', 'International'] },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'getAvailableOptions',
       description:
         "List distinct in-stock values for one attribute, optionally narrowed by filters. Use for questions like 'what colors do you have for iPhone 17 Pro?' or 'what RAM options for MacBook Pro M4?' or 'what storage sizes for iPad Air?'.",
@@ -262,6 +280,9 @@ export async function executeTool(name, args) {
       case 'webFetch':
         result = await webFetch(args || {});
         break;
+      case 'browseMenu':
+        result = await tool_browseMenu(args || {});
+        break;
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -289,16 +310,21 @@ function briefProduct(p) {
     in_stock: p.in_stock,
     category: p.category,
     family: p.family,
+    model_key: p.model_key,
     variant: p.variant,
     chip: p.chip,
     storage_gb: p.storage_gb,
     ram_gb: p.ram_gb,
     screen_inch: p.screen_inch,
     color: p.color,
+    material: p.material,
+    year: p.year,
+    generation: p.generation,
     region: p.region,
     sim: p.sim,
     connectivity: p.connectivity,
     keyboard_layout: p.keyboard_layout,
+    category_path: p.category_path,
     url: p.url,
   };
 }
@@ -575,6 +601,156 @@ async function tool_getBySKU({ sku }) {
   return {
     products: matches.map(briefProduct),
     count: matches.length,
+  };
+}
+
+// Menu browser — given what the customer has chosen so far, return the next
+// level's available options. Drives a clean "pick → narrow → pick" flow so
+// classifications never get mixed up (see owner request).
+async function tool_browseMenu(args = {}) {
+  const { category, model_key, storage_gb, color, region } = args;
+  const catalog = await getCatalog();
+  const inStock = catalog.filter((p) => p.in_stock !== false);
+
+  // No input at all → return categories
+  if (!category) {
+    const categories = new Map();
+    for (const p of inStock) {
+      if (!p.category) continue;
+      categories.set(p.category, (categories.get(p.category) || 0) + 1);
+    }
+    return {
+      level: 'category',
+      options: [...categories.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, count]) => ({ value: name, count })),
+      next_level: 'model_key',
+      hint: 'Ask the customer which category they want.',
+    };
+  }
+
+  // Filter by category
+  let scoped = inStock.filter((p) => p.category === category);
+
+  // No model_key yet → return available model keys
+  if (!model_key) {
+    const models = new Map();
+    for (const p of scoped) {
+      if (!p.model_key) continue;
+      if (!models.has(p.model_key)) models.set(p.model_key, { count: 0, prices: [] });
+      const m = models.get(p.model_key);
+      m.count++;
+      if (Number.isFinite(p.price_aed)) m.prices.push(p.price_aed);
+    }
+    return {
+      level: 'model_key',
+      category,
+      options: [...models.entries()]
+        .sort((a, b) => b[1].count - a[1].count)
+        .map(([name, info]) => ({
+          value: name,
+          count: info.count,
+          from_aed: info.prices.length ? Math.min(...info.prices) : null,
+        })),
+      next_level: 'storage_gb',
+      hint: 'Offer the customer the available models for this category.',
+    };
+  }
+
+  // Filter by model_key
+  scoped = scoped.filter((p) => p.model_key === model_key);
+  if (scoped.length === 0) {
+    return { level: 'empty', category, model_key, options: [], hint: `No in-stock items for ${model_key}.` };
+  }
+
+  // No storage yet → return storages (only if they vary)
+  if (!storage_gb) {
+    const storages = new Map();
+    for (const p of scoped) {
+      if (!p.storage_gb) continue;
+      if (!storages.has(p.storage_gb)) storages.set(p.storage_gb, { count: 0, prices: [] });
+      const s = storages.get(p.storage_gb);
+      s.count++;
+      if (Number.isFinite(p.price_aed)) s.prices.push(p.price_aed);
+    }
+    if (storages.size > 1) {
+      return {
+        level: 'storage_gb',
+        category,
+        model_key,
+        options: [...storages.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([gb, info]) => ({
+            value: gb,
+            label: gb >= 1024 ? `${gb / 1024}TB` : `${gb}GB`,
+            count: info.count,
+            from_aed: info.prices.length ? Math.min(...info.prices) : null,
+          })),
+        next_level: 'color',
+      };
+    }
+  } else {
+    scoped = scoped.filter((p) => p.storage_gb === storage_gb);
+  }
+
+  // No color yet → return colors
+  if (!color) {
+    const colors = new Map();
+    for (const p of scoped) {
+      if (!p.color) continue;
+      if (!colors.has(p.color)) colors.set(p.color, 0);
+      colors.set(p.color, colors.get(p.color) + 1);
+    }
+    if (colors.size > 0) {
+      return {
+        level: 'color',
+        category,
+        model_key,
+        storage_gb,
+        options: [...colors.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([name, count]) => ({ value: name, count })),
+        next_level: 'region',
+      };
+    }
+  } else {
+    scoped = scoped.filter((p) => p.color === color);
+  }
+
+  // Region next, if multiple exist
+  if (!region) {
+    const regions = new Map();
+    for (const p of scoped) {
+      const r = p.region || 'Standard';
+      regions.set(r, (regions.get(r) || 0) + 1);
+    }
+    if (regions.size > 1) {
+      return {
+        level: 'region',
+        category,
+        model_key,
+        storage_gb,
+        color,
+        options: [...regions.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([name, count]) => ({ value: name, count })),
+        next_level: 'done',
+      };
+    }
+  } else {
+    scoped = scoped.filter((p) => (p.region || 'Standard') === region);
+  }
+
+  // At this point we should be at a single SKU or a small leaf set
+  return {
+    level: 'done',
+    category,
+    model_key,
+    storage_gb,
+    color,
+    region,
+    products: scoped.slice(0, 10).map(briefProduct),
+    count: scoped.length,
   };
 }
 
