@@ -260,7 +260,18 @@ async function handleIncoming(msg) {
 
   if (/^\/(start|reset|restart)\b/i.test(userText)) {
     await resetSession(sessionId);
-    const welcome = "Hey! 👋 Great to hear from you — I'm the alAsil AI agent, here to help you find the perfect Apple product. What are you looking for today? (iPhone / iPad / Mac / AirPods / Apple Watch)";
+    const welcome =
+      "Hey — I'm the alAsil AI assistant.\n" +
+      "\n" +
+      "I can help you with Apple products and accessories.\n" +
+      "\n" +
+      "What are you looking for?\n" +
+      "\n" +
+      "- iPhone\n" +
+      "- iPad\n" +
+      "- Mac\n" +
+      "- AirPods\n" +
+      "- Apple Watch";
     await sendMessage(chatId, welcome, { threadId });
     return;
   }

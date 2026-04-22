@@ -126,15 +126,50 @@ IMPORTANT: saveCorrection is permanent. Only call it AFTER a real tool verified 
 
 # FORMATTING / PARAGRAPHING (CRITICAL — customers read on phone screens)
 
-- Break ideas onto SEPARATE LINES. Use a blank line between distinct thoughts.
-- NO run-on sentences. One idea per sentence. 15 words max per sentence.
-- When listing 3+ items, use a simple bullet list with each item on its own line:
-      - item 1
-      - item 2
-      - item 3
-  Do NOT inline 3+ items with commas ("256GB, 512GB, and 1TB"). Always list vertically.
-- Total reply: 2-5 lines of content, split across 1-3 short paragraphs.
-- Leave a blank line before the closing question so it stands out.
+Your reply MUST be broken into short paragraphs with blank lines between them.
+This is non-negotiable. A reply that is one big paragraph is a broken reply.
+
+HARD RULES:
+- One idea per sentence. 15 words max per sentence.
+- Between each distinct idea: an ACTUAL blank line (two newlines).
+- First sentence on its own line/paragraph.
+- Closing question on its own line/paragraph with a blank line BEFORE it.
+- Lists of 3+ items: vertical bullets, NEVER inline with commas.
+- Total reply: 2-5 short paragraphs, each 1-2 lines.
+
+STRUCTURE TEMPLATE (most common reply shape):
+
+      <direct answer sentence>
+
+      <supporting detail or listing>
+
+      <closing question>
+
+BAD (violates paragraphing — a single run-on block):
+      Could you please specify which model of the iPhone Air you are interested in? We have different storage options available: 256GB, 512GB, and 1TB. Let me know, and I can provide more details!
+
+GOOD (three short paragraphs with blank lines):
+      Which storage do you want for the iPhone Air?
+
+      - 256GB
+      - 512GB
+      - 1TB
+
+      Let me know and I'll share the details.
+
+BAD:
+      We have the iPhone 17 Pro in 256GB Deep Blue for AED 5,139 and also 512GB Cosmic Orange for AED 5,499 if you want more storage, let me know which one.
+
+GOOD:
+      Two options in stock:
+
+      1. iPhone 17 Pro 256GB Deep Blue — AED 5,139
+      2. iPhone 17 Pro 512GB Cosmic Orange — AED 5,499
+
+      Which one suits you?
+
+Remember: blank lines between paragraphs are REQUIRED. A customer should be
+able to scan your reply in 3 seconds on a phone screen.
 
 BAD (run-on, hard to read):
       Could you please specify which model of the iPhone Air you are interested in? We have different storage options available: 256GB, 512GB, and 1TB. Let me know, and I can provide more details!
@@ -248,6 +283,31 @@ function stripFormatting(text) {
   return s.trim();
 }
 
+// Enforce paragraph breaks even when the model forgets. If the entire reply
+// is one flat paragraph (no blank lines) AND is longer than ~1 sentence,
+// insert a blank line after each sentence-ending punctuation so it becomes
+// readable on a phone.
+function enforceParagraphBreaks(text) {
+  const s = String(text || '').trim();
+  if (!s) return s;
+  // Already multi-paragraph? Leave it alone.
+  if (/\n\s*\n/.test(s)) return s;
+  // Short enough to be a single line? Leave it.
+  const sentenceCount = (s.match(/[.!?]\s+[A-Z0-9"'-]/g) || []).length + 1;
+  if (sentenceCount < 2) return s;
+  // If the reply has numbered list items on same line (1. ... 2. ...),
+  // we would break those incorrectly — skip aggressive splitting.
+  if (/^\s*\d+\.\s/m.test(s)) return s;
+  // Insert blank line after sentence boundaries. Avoid breaking inside URLs
+  // (cheap approximation: don't break right after http://, https://, or "e.g.", "i.e.").
+  return s.replace(/([.!?])\s+(?=[A-Z0-9"'])/g, (match, p1, offset, full) => {
+    // Guard: if preceding ~10 chars contain a URL scheme or abbreviation, skip.
+    const before = full.slice(Math.max(0, offset - 12), offset);
+    if (/https?:\/\/|e\.g\.|i\.e\.|Mr\.|Mrs\.|Dr\./i.test(before)) return match;
+    return p1 + '\n\n';
+  });
+}
+
 // Strip product URLs when the reply lists MULTIPLE products.
 // Model-side instructions don't always hold — this is the enforcement.
 // We keep any single trailing URL if the reply only shows one product.
@@ -349,7 +409,9 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
 
       // No tool call → this is the final assistant message.
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        const text = stripUrlsForMultiProduct(stripFormatting(msg.content || ''), collectedProducts.length);
+        const text = enforceParagraphBreaks(
+          stripUrlsForMultiProduct(stripFormatting(msg.content || ''), collectedProducts.length)
+        );
         const latency = Date.now() - t0;
         logger.info(
           {
@@ -431,9 +493,11 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
         }),
       { retries: MAX_RETRIES, label: 'agent.final' }
     );
-    const text = stripUrlsForMultiProduct(
-      stripFormatting(final.choices?.[0]?.message?.content || ''),
-      collectedProducts.length
+    const text = enforceParagraphBreaks(
+      stripUrlsForMultiProduct(
+        stripFormatting(final.choices?.[0]?.message?.content || ''),
+        collectedProducts.length
+      )
     );
     const latency = Date.now() - t0;
     logger.info(
