@@ -9,6 +9,7 @@
 
 import { getCatalog, matchesFilter, distinctValues, enrichProduct } from '../modules/catalog.js';
 import { searchProducts as shopifyLiveSearch } from '../modules/shopify.js';
+import { addCorrection } from '../modules/corrections.js';
 import { logger } from '../logger.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -176,6 +177,36 @@ export const tools = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'saveCorrection',
+      description:
+        "Save a permanent correction AFTER you have verified (via another tool call or the knowledge base) that your previous reply was factually wrong and the customer is right. The correction is stored and injected into EVERY future agent system prompt, so the next time any customer asks the same question, the fix is automatic. Only call this when the customer's disagreement has been verified. Do NOT call it if the bot was actually correct.",
+      parameters: {
+        type: 'object',
+        properties: {
+          original_customer_message: {
+            type: 'string',
+            description: "The customer's ORIGINAL question (from conversation_history) that got the wrong reply — not their current disagreement message.",
+          },
+          wrong_reply: {
+            type: 'string',
+            description: "The bot's previous reply that was factually wrong (from conversation_history).",
+          },
+          correct_reply: {
+            type: 'string',
+            description: "The correct reply the bot SHOULD have given — concise, plain text, in the same language/tone you'll send to the customer.",
+          },
+          note: {
+            type: 'string',
+            description: "Optional one-line explanation of what was wrong and how you verified it (e.g. 'verified via getAvailableOptions that iPhone 17 color list includes Cosmic Orange').",
+          },
+        },
+        required: ['original_customer_message', 'correct_reply'],
+      },
+    },
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -200,6 +231,9 @@ export async function executeTool(name, args) {
         break;
       case 'getProductByTitle':
         result = await tool_getProductByTitle(args || {});
+        break;
+      case 'saveCorrection':
+        result = await tool_saveCorrection(args || {});
         break;
       default:
         return { error: `Unknown tool: ${name}` };
@@ -515,6 +549,24 @@ async function tool_getBySKU({ sku }) {
     products: matches.map(briefProduct),
     count: matches.length,
   };
+}
+
+async function tool_saveCorrection({ original_customer_message, wrong_reply, correct_reply, note }) {
+  if (!original_customer_message || !correct_reply) {
+    return { error: 'original_customer_message and correct_reply are required' };
+  }
+  try {
+    const row = addCorrection({
+      user_msg: original_customer_message,
+      wrong_reply: wrong_reply || '',
+      correct_reply,
+      note: note ? 'auto-learned from customer feedback: ' + note : 'auto-learned from customer feedback',
+    });
+    logger.info({ id: row.id, user_msg: row.user_msg.slice(0, 80) }, 'customer-confirmed correction saved');
+    return { ok: true, id: row.id };
+  } catch (err) {
+    return { error: String(err?.message || err) };
+  }
 }
 
 async function tool_getProductByTitle({ title_query, limit = 6 }) {
