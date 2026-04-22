@@ -9,8 +9,11 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { knowledgeBlock } from './knowledge.js';
 import { correctionsBlock } from './corrections.js';
+import { limitedRetry } from '../utils/concurrency.js';
+import { openaiLimiter } from './agent.js';
 
 const client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
+const MAX_RETRIES = Math.max(0, Math.min(6, Number(config.AGENT_MAX_RETRIES) || 3));
 
 const GENERATE_SYSTEM = `You are the senior support lead for alAsil (100% authentic Apple store in Dubai, UAE). A junior agent just gave a WRONG reply to a customer. The store owner is now telling you what was wrong. Your job: write the CORRECT reply the junior agent should have given.
 
@@ -50,17 +53,22 @@ export async function generateCorrectReply({ user_msg, wrong_reply, what_wrong, 
   ].join('\n');
 
   try {
-    const resp = await client.chat.completions.create({
-      model: config.AGENT_MODEL || config.OPENAI_MODEL,
-      temperature: 0.3,
-      max_tokens: 400,
-      messages: [
-        { role: 'system', content: GENERATE_SYSTEM },
-        { role: 'system', content: knowledge },
-        ...(pastCorrections ? [{ role: 'system', content: pastCorrections }] : []),
-        { role: 'user', content: userPrompt },
-      ],
-    });
+    const resp = await limitedRetry(
+      openaiLimiter,
+      () =>
+        client.chat.completions.create({
+          model: config.AGENT_MODEL || config.OPENAI_MODEL,
+          temperature: 0.3,
+          max_tokens: 400,
+          messages: [
+            { role: 'system', content: GENERATE_SYSTEM },
+            { role: 'system', content: knowledge },
+            ...(pastCorrections ? [{ role: 'system', content: pastCorrections }] : []),
+            { role: 'user', content: userPrompt },
+          ],
+        }),
+      { retries: MAX_RETRIES, label: 'corrections.generate' }
+    );
     const text = (resp.choices?.[0]?.message?.content || '').trim();
     if (!text) throw new Error('empty generator response');
     return stripFormatting(text);

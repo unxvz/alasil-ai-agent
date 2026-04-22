@@ -409,9 +409,12 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
         badge.className = 'badge live';
         statusText.textContent = 'Live';
 
+        const lim = stats.openai_limiter || {};
+        const limText = lim.max ? ' · OpenAI gate ' + (lim.active || 0) + '/' + lim.max + (lim.queued ? ' (+' + lim.queued + ' queued)' : '') : '';
         document.getElementById('sub').textContent =
           'Uptime ' + fmtUptime(stats.uptime_ms || 0) +
-          ' · Last refresh ' + new Date().toLocaleTimeString();
+          ' · Last refresh ' + new Date().toLocaleTimeString() +
+          limText;
 
         // Metrics
         document.getElementById('m-turns').textContent = stats.total_turns || 0;

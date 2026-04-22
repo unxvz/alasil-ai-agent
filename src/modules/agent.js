@@ -15,6 +15,15 @@ import { knowledgeBlock } from './knowledge.js';
 import { tools, executeTool } from '../tools/index.js';
 import { recordAgentTurn } from './agent-metrics.js';
 import { correctionsBlock } from './corrections.js';
+import { createLimiter, limitedRetry } from '../utils/concurrency.js';
+
+// Single shared limiter for ALL OpenAI calls across the process. Both agent
+// turns and correction-generator calls funnel through this gate so we never
+// exceed MAX_CONCURRENT in-flight calls regardless of who is using OpenAI.
+export const openaiLimiter = createLimiter(
+  Math.max(1, Math.min(50, Number(config.AGENT_MAX_CONCURRENT) || 5))
+);
+const MAX_RETRIES = Math.max(0, Math.min(8, Number(config.AGENT_MAX_RETRIES) || 5));
 
 const client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
@@ -198,14 +207,19 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
   try {
     while (iterations < maxIters) {
       iterations++;
-      const resp = await client.chat.completions.create({
-        model: modelForAgent(),
-        messages,
-        tools,
-        tool_choice: 'auto',
-        temperature: 0.2,
-        max_tokens: 650,
-      });
+      const resp = await limitedRetry(
+        openaiLimiter,
+        () =>
+          client.chat.completions.create({
+            model: modelForAgent(),
+            messages,
+            tools,
+            tool_choice: 'auto',
+            temperature: 0.2,
+            max_tokens: 650,
+          }),
+        { retries: MAX_RETRIES, label: 'agent.iter' }
+      );
 
       const msg = resp.choices?.[0]?.message;
       if (!msg) throw new UpstreamError('Empty OpenAI response in agent loop');
@@ -284,12 +298,17 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
       content:
         'You have reached the max tool-call budget. Produce your final answer to the customer NOW based on the information you gathered. If you still do not have enough info, say "Let me check with our team — WhatsApp +971 4 288 5680." Do NOT call any more tools.',
     });
-    const final = await client.chat.completions.create({
-      model: modelForAgent(),
-      messages,
-      temperature: 0.2,
-      max_tokens: 500,
-    });
+    const final = await limitedRetry(
+      openaiLimiter,
+      () =>
+        client.chat.completions.create({
+          model: modelForAgent(),
+          messages,
+          temperature: 0.2,
+          max_tokens: 500,
+        }),
+      { retries: MAX_RETRIES, label: 'agent.final' }
+    );
     const text = stripFormatting(final.choices?.[0]?.message?.content || '');
     const latency = Date.now() - t0;
     logger.info(

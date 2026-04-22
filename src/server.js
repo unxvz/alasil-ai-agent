@@ -13,6 +13,7 @@ import { getCatalog, catalogStatus } from './modules/catalog.js';
 import { snapshotMetrics, readRecentTurns } from './modules/agent-metrics.js';
 import { listCorrections, addCorrection, deleteCorrection } from './modules/corrections.js';
 import { generateCorrectReply } from './modules/correction-generator.js';
+import { openaiLimiter } from './modules/agent.js';
 import { DASHBOARD_HTML } from './dashboard-html.js';
 
 const app = express();
@@ -63,7 +64,7 @@ router.get('/health', async (_req, res) => {
 });
 
 router.get('/agent/stats', (_req, res) => {
-  res.json(snapshotMetrics());
+  res.json({ ...snapshotMetrics(), openai_limiter: openaiLimiter.stats() });
 });
 
 router.get('/agent/recent', (req, res) => {

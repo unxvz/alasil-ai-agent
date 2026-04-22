@@ -37,6 +37,12 @@ const schema = z.object({
   USE_AGENT: z.coerce.boolean().default(false),
   AGENT_MAX_ITERATIONS: z.coerce.number().default(5),
   AGENT_MODEL: z.string().default(''),
+
+  // Concurrency + retry for OpenAI calls under load (see src/utils/concurrency.js).
+  // Tier 1 (Free/default paid): ~500 RPM / 200k TPM for gpt-4o-mini. With agent
+  // turns averaging ~15k tokens, max safe concurrency is ~5-6 to stay under TPM.
+  AGENT_MAX_CONCURRENT: z.coerce.number().default(5),
+  AGENT_MAX_RETRIES: z.coerce.number().default(5),
 });
 
 const parsed = schema.safeParse(process.env);
