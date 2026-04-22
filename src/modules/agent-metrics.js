@@ -92,6 +92,39 @@ export function snapshotMetrics() {
   };
 }
 
+// Read the last N turns from logs/agent.jsonl. Cheap enough for a dashboard
+// poll — we tail the file from its end instead of reading the whole thing.
+export function readRecentTurns(n = 20) {
+  try {
+    if (!fs.existsSync(LOG_FILE)) return [];
+    const size = fs.statSync(LOG_FILE).size;
+    // Read the last 256KB of the file (enough for ~500 turns).
+    const readBytes = Math.min(size, 256 * 1024);
+    const buf = Buffer.alloc(readBytes);
+    const fd = fs.openSync(LOG_FILE, 'r');
+    try {
+      fs.readSync(fd, buf, 0, readBytes, Math.max(0, size - readBytes));
+    } finally {
+      fs.closeSync(fd);
+    }
+    const lines = buf.toString('utf8').split('\n').filter(Boolean);
+    const rows = lines
+      .slice(-n)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    return rows.reverse(); // newest first
+  } catch (err) {
+    logger.warn({ err: String(err?.message || err) }, 'readRecentTurns failed');
+    return [];
+  }
+}
+
 export function resetMetrics() {
   counters = {
     total_turns: 0,

@@ -10,7 +10,8 @@ import { errorHandler } from './utils/errors.js';
 import { closeRedis } from './modules/context.js';
 import { pingShopify } from './modules/shopify.js';
 import { getCatalog, catalogStatus } from './modules/catalog.js';
-import { snapshotMetrics } from './modules/agent-metrics.js';
+import { snapshotMetrics, readRecentTurns } from './modules/agent-metrics.js';
+import { DASHBOARD_HTML } from './dashboard-html.js';
 
 const app = express();
 
@@ -61,6 +62,30 @@ router.get('/health', async (_req, res) => {
 
 router.get('/agent/stats', (_req, res) => {
   res.json(snapshotMetrics());
+});
+
+router.get('/agent/recent', (req, res) => {
+  const n = Math.min(100, Math.max(1, parseInt(req.query.n, 10) || 25));
+  res.json({ turns: readRecentTurns(n) });
+});
+
+// Monitoring dashboard. Gated by DASHBOARD_SECRET env var (optional).
+// If set, URL is /dashboard/:secret; if unset, /dashboard is public.
+router.get('/dashboard', (_req, res) => {
+  if (process.env.DASHBOARD_SECRET) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } });
+  }
+  res.type('html').send(DASHBOARD_HTML);
+});
+router.get('/dashboard/:secret', (req, res) => {
+  const expected = process.env.DASHBOARD_SECRET;
+  if (!expected) {
+    return res.redirect('/dashboard');
+  }
+  if (req.params.secret !== expected) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Invalid dashboard secret' } });
+  }
+  res.type('html').send(DASHBOARD_HTML);
 });
 
 const chatLimiter = rateLimit({
