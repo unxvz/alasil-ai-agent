@@ -67,7 +67,12 @@ function invalidate() {
 
 export function listCorrections({ includeDeleted = false } = {}) {
   const all = loadAll();
-  return includeDeleted ? all : all.filter((r) => !r.deleted);
+  // Dedupe by id — keep LATEST row per id so tombstones override originals.
+  // append-only file can have multiple rows for the same id (add, then delete).
+  const byId = new Map();
+  for (const r of all) byId.set(r.id, r);
+  const unique = Array.from(byId.values());
+  return includeDeleted ? unique : unique.filter((r) => !r.deleted);
 }
 
 export function addCorrection({ user_msg, wrong_reply, correct_reply, note }) {
