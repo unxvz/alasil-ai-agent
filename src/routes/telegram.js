@@ -7,6 +7,7 @@ import { detectIntent } from '../modules/intent.js';
 import { extractEntities } from '../modules/entities.js';
 import { getSession, saveSession, resetSession, mergeProfile, appendHistory } from '../modules/context.js';
 import { buildResponse } from '../modules/response.js';
+import { runAgent } from '../modules/agent.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
 
 export const telegramRouter = Router();
@@ -48,39 +49,12 @@ function shouldIgnoreMessage(msg, me) {
   return false;
 }
 
-async function handleIncoming(msg) {
+// ────────────────────────────────────────────────────────────────────────────
+// Handler — legacy pipeline (regex + response.js)
+// ────────────────────────────────────────────────────────────────────────────
+async function handleLegacy(msg, session, sessionId, userText) {
   const chatId = msg.chat?.id;
   const threadId = msg.message_thread_id;
-  const userText = msg.text;
-  if (!chatId || !userText) return;
-
-  const sessionId = sessionIdFor(chatId, threadId);
-
-  if (isDuplicate(sessionId, userText)) {
-    logger.info({ sessionId, chatId, threadId }, 'telegram duplicate skipped');
-    return;
-  }
-
-  if (/^\/(start|reset|restart)\b/i.test(userText)) {
-    await resetSession(sessionId);
-    const welcome = "Hey! 👋 Great to hear from you — I'm the alAsil AI agent, here to help you find the perfect Apple product. What are you looking for today? (iPhone / iPad / Mac / AirPods / Apple Watch)";
-    await sendMessage(chatId, welcome, { threadId });
-    return;
-  }
-  if (/^\/pause\b/i.test(userText)) {
-    const s = await getSession(sessionId); s.muted = true; await saveSession(sessionId, s);
-    await sendMessage(chatId, 'Bot paused in this topic. Send /resume to re-enable.', { threadId });
-    return;
-  }
-  if (/^\/resume\b/i.test(userText)) {
-    const s = await getSession(sessionId); s.muted = false; await saveSession(sessionId, s);
-    await sendMessage(chatId, 'Bot resumed.', { threadId });
-    return;
-  }
-
-  const session = await getSession(sessionId);
-  if (session.muted) return;
-  session.turns = (session.turns || 0) + 1;
 
   let effectiveText = userText;
   if (Array.isArray(session.last_options) && session.last_options.length) {
@@ -136,14 +110,118 @@ async function handleIncoming(msg) {
   await saveSession(sessionId, session);
 
   const outText = (resp.text || '').trim();
-
   try {
     await sendMessage(chatId, outText, { threadId });
   } catch (err) {
     logger.error({ err, chatId, threadId }, 'sendMessage failed');
   }
 
-  logger.info({ sessionId, chatId, threadId, intent, confidence, responseType: resp.type }, 'telegram reply');
+  logger.info({ sessionId, chatId, threadId, intent, confidence, responseType: resp.type, path: 'legacy' }, 'telegram reply');
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Handler — LLM tool-calling agent
+// ────────────────────────────────────────────────────────────────────────────
+async function handleAgent(msg, session, sessionId, userText) {
+  const chatId = msg.chat?.id;
+  const threadId = msg.message_thread_id;
+
+  const { normalized, language } = normalize(userText);
+  session.language = language === 'mixed' ? (session.language || 'en') : language;
+
+  appendHistory(session, 'user', userText);
+  await sendChatAction(chatId, 'typing', { threadId });
+
+  const agentResult = await runAgent({
+    userMessage: userText,
+    language: session.language,
+    history: session.history || [],
+    lastProducts: session.last_products || [],
+    sessionId,
+  });
+
+  if (Array.isArray(agentResult.products) && agentResult.products.length > 0) {
+    session.last_products = agentResult.products.slice(0, 4);
+  }
+  // Agent path doesn't use structured options flow — clear stale state.
+  session.last_question = null;
+  session.last_options = [];
+  session.turns = (session.turns || 0) + 1;
+
+  appendHistory(session, 'assistant', agentResult.text);
+  await saveSession(sessionId, session);
+
+  const outText = (agentResult.text || '').trim();
+  try {
+    await sendMessage(chatId, outText, { threadId });
+  } catch (err) {
+    logger.error({ err, chatId, threadId }, 'sendMessage failed');
+  }
+
+  logger.info(
+    {
+      sessionId,
+      chatId,
+      threadId,
+      path: 'agent',
+      iterations: agentResult.iterations,
+      tool_calls: (agentResult.toolCalls || []).map((t) => ({ name: t.name, count: t.count })),
+      latency_ms: agentResult.latency_ms,
+      maxed_out: Boolean(agentResult.maxed_out),
+      error: agentResult.error || null,
+    },
+    'telegram reply'
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Router
+// ────────────────────────────────────────────────────────────────────────────
+async function handleIncoming(msg) {
+  const chatId = msg.chat?.id;
+  const threadId = msg.message_thread_id;
+  const userText = msg.text;
+  if (!chatId || !userText) return;
+
+  const sessionId = sessionIdFor(chatId, threadId);
+
+  if (isDuplicate(sessionId, userText)) {
+    logger.info({ sessionId, chatId, threadId }, 'telegram duplicate skipped');
+    return;
+  }
+
+  if (/^\/(start|reset|restart)\b/i.test(userText)) {
+    await resetSession(sessionId);
+    const welcome = "Hey! 👋 Great to hear from you — I'm the alAsil AI agent, here to help you find the perfect Apple product. What are you looking for today? (iPhone / iPad / Mac / AirPods / Apple Watch)";
+    await sendMessage(chatId, welcome, { threadId });
+    return;
+  }
+  if (/^\/pause\b/i.test(userText)) {
+    const s = await getSession(sessionId); s.muted = true; await saveSession(sessionId, s);
+    await sendMessage(chatId, 'Bot paused in this topic. Send /resume to re-enable.', { threadId });
+    return;
+  }
+  if (/^\/resume\b/i.test(userText)) {
+    const s = await getSession(sessionId); s.muted = false; await saveSession(sessionId, s);
+    await sendMessage(chatId, 'Bot resumed.', { threadId });
+    return;
+  }
+
+  const session = await getSession(sessionId);
+  if (session.muted) return;
+  session.turns = (session.turns || 0) + 1;
+
+  if (config.USE_AGENT) {
+    try {
+      await handleAgent(msg, session, sessionId, userText);
+      return;
+    } catch (err) {
+      logger.error({ err: String(err?.message || err), sessionId }, 'agent path threw — falling back to legacy');
+      // Fall through to legacy pipeline for robustness.
+    }
+  }
+
+  await handleLegacy(msg, session, sessionId, userText);
 }
 
 telegramRouter.post('/:secret', async (req, res) => {

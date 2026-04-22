@@ -31,6 +31,12 @@ const schema = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
   TELEGRAM_PUBLIC_URL: z.string().optional(),
   TELEGRAM_ADMIN_USERS: z.string().optional(),
+
+  // Feature flag: route requests through the LLM tool-calling agent.
+  // When false, the legacy response.js pipeline is used.
+  USE_AGENT: z.coerce.boolean().default(false),
+  AGENT_MAX_ITERATIONS: z.coerce.number().default(5),
+  AGENT_MODEL: z.string().default(''),
 });
 
 const parsed = schema.safeParse(process.env);

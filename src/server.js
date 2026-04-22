@@ -10,6 +10,7 @@ import { errorHandler } from './utils/errors.js';
 import { closeRedis } from './modules/context.js';
 import { pingShopify } from './modules/shopify.js';
 import { getCatalog, catalogStatus } from './modules/catalog.js';
+import { snapshotMetrics } from './modules/agent-metrics.js';
 
 const app = express();
 
@@ -46,11 +47,20 @@ router.get('/health', async (_req, res) => {
       ok: true,
       shopify,
       catalog: catalogStatus(),
+      agent: {
+        enabled: config.USE_AGENT,
+        model: config.AGENT_MODEL || config.OPENAI_MODEL,
+        max_iterations: config.AGENT_MAX_ITERATIONS,
+      },
       uptime: process.uptime(),
     });
   } catch (err) {
     res.status(503).json({ ok: false, error: String(err.message || err) });
   }
+});
+
+router.get('/agent/stats', (_req, res) => {
+  res.json(snapshotMetrics());
 });
 
 const chatLimiter = rateLimit({
