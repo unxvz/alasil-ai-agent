@@ -9,21 +9,21 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 <title>alAsil Agent Dashboard</title>
 <style>
   :root {
-    --bg:          #0b0d10;
-    --panel:       #14181d;
-    --panel-2:     #1a1f25;
-    --panel-3:     #20262d;
-    --border:      #252b33;
-    --border-light:#2d343d;
-    --text:        #e6edf3;
-    --text-dim:    #8b949e;
-    --text-dimmer: #636b75;
-    --accent:      #58a6ff;
-    --green:       #3fb950;
-    --yellow:      #d29922;
-    --red:         #f85149;
+    --bg:          #f6f8fa;
+    --panel:       #ffffff;
+    --panel-2:     #f6f8fa;
+    --panel-3:     #eaeef2;
+    --border:      #d0d7de;
+    --border-light:#afb8c1;
+    --text:        #1f2328;
+    --text-dim:    #656d76;
+    --text-dimmer: #8c959f;
+    --accent:      #0969da;
+    --green:       #1a7f37;
+    --yellow:      #9a6700;
+    --red:         #cf222e;
     --mono:        ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    --shadow:      0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow:      0 1px 3px rgba(31, 35, 40, 0.1);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; }
@@ -62,9 +62,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
   /* Alerts */
   .alert-banner { padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; display: flex; align-items: center; gap: 10px; }
-  .alert-banner.bad { background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.4); color: var(--red); }
-  .alert-banner.warn { background: rgba(210, 153, 34, 0.08); border: 1px solid rgba(210, 153, 34, 0.4); color: var(--yellow); }
-  .alert-banner .alert-title { font-weight: 600; font-size: 11px; padding: 2px 8px; background: currentColor; color: var(--bg); border-radius: 4px; letter-spacing: 0.5px; }
+  .alert-banner.bad { background: rgba(207, 34, 46, 0.06); border: 1px solid rgba(207, 34, 46, 0.35); color: var(--red); }
+  .alert-banner.warn { background: rgba(154, 103, 0, 0.06); border: 1px solid rgba(154, 103, 0, 0.3); color: var(--yellow); }
+  .alert-banner .alert-title { font-weight: 600; font-size: 11px; padding: 2px 8px; background: currentColor; color: #fff; border-radius: 4px; letter-spacing: 0.5px; }
 
   /* Tool usage table */
   .tool-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -85,9 +85,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .turn-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
   .turn-head .ts { font-family: var(--mono); color: var(--text-dimmer); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; font-family: var(--mono); }
-  .pill.ok { color: var(--green); background: rgba(63, 185, 80, 0.1); }
-  .pill.max { color: var(--yellow); background: rgba(210, 153, 34, 0.12); }
-  .pill.err { color: var(--red); background: rgba(248, 81, 73, 0.12); }
+  .pill.ok { color: var(--green); background: rgba(26, 127, 55, 0.1); }
+  .pill.max { color: var(--yellow); background: rgba(154, 103, 0, 0.1); }
+  .pill.err { color: var(--red); background: rgba(207, 34, 46, 0.1); }
   .pill.lang { color: var(--text-dim); background: var(--panel-3); text-transform: none; letter-spacing: 0; font-weight: 500; }
   .pill.lat { color: var(--text-dim); background: var(--panel-3); text-transform: none; letter-spacing: 0; font-weight: 500; }
   .turn-head .spacer { flex: 1; }
@@ -96,45 +96,45 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   /* Chat bubbles */
   .bubble { padding: 9px 12px; border-radius: 10px; margin: 4px 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
   .bubble.user { background: var(--panel-3); border: 1px solid var(--border); max-width: 80%; margin-right: auto; }
-  .bubble.bot { background: rgba(88, 166, 255, 0.04); border: 1px solid rgba(88, 166, 255, 0.15); max-width: 85%; margin-left: auto; }
-  .bubble.bot.err-bg { background: rgba(248, 81, 73, 0.04); border-color: rgba(248, 81, 73, 0.2); }
+  .bubble.bot { background: rgba(9, 105, 218, 0.06); border: 1px solid rgba(9, 105, 218, 0.2); max-width: 85%; margin-left: auto; color: #0a3069; }
+  .bubble.bot.err-bg { background: rgba(207, 34, 46, 0.05); border-color: rgba(207, 34, 46, 0.25); color: #86181d; }
   .bubble .label { display: block; font-size: 10px; color: var(--text-dimmer); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 500; }
-  .bubble.bot .label { text-align: right; }
+  .bubble.bot .label { text-align: right; color: var(--accent); opacity: 0.7; }
 
   /* Tool pills inside a turn */
   .tools-row { margin: 6px 0 2px 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .tools-row .tools-label { font-size: 10px; color: var(--text-dimmer); text-transform: uppercase; letter-spacing: 0.5px; margin-right: 4px; }
   .tool-pill { display: inline-block; padding: 2px 7px; background: var(--panel-3); border: 1px solid var(--border); border-radius: 4px; font-size: 10px; font-family: var(--mono); color: var(--text-dim); }
-  .tool-pill.empty { color: var(--yellow); border-color: rgba(210, 153, 34, 0.3); background: rgba(210, 153, 34, 0.06); }
-  .tool-pill.hit { color: var(--green); border-color: rgba(63, 185, 80, 0.25); background: rgba(63, 185, 80, 0.05); }
+  .tool-pill.empty { color: var(--yellow); border-color: rgba(154, 103, 0, 0.3); background: rgba(154, 103, 0, 0.06); }
+  .tool-pill.hit { color: var(--green); border-color: rgba(26, 127, 55, 0.25); background: rgba(26, 127, 55, 0.06); }
 
   /* Buttons */
-  button { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 500; transition: all 0.1s; }
-  button:hover { background: var(--panel-3); border-color: var(--accent); }
-  button.flag-btn { color: var(--text-dim); }
-  button.flag-btn:hover { color: var(--red); border-color: rgba(248, 81, 73, 0.4); background: rgba(248, 81, 73, 0.05); }
-  button.flag-btn.flagged { color: var(--red); border-color: var(--red); background: rgba(248, 81, 73, 0.1); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #000; }
-  button.primary:hover { background: #79b8ff; border-color: #79b8ff; color: #000; }
-  button.generate { background: var(--accent); border-color: var(--accent); color: #000; }
-  button.generate:hover { background: #79b8ff; border-color: #79b8ff; color: #000; }
-  button.danger { color: var(--red); border-color: rgba(248, 81, 73, 0.3); }
-  button.danger:hover { background: rgba(248, 81, 73, 0.1); border-color: var(--red); }
+  button { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 500; transition: all 0.1s; }
+  button:hover { background: var(--panel-2); border-color: var(--border-light); }
+  button.flag-btn { color: var(--text-dim); background: var(--panel); }
+  button.flag-btn:hover { color: var(--red); border-color: rgba(207, 34, 46, 0.4); background: rgba(207, 34, 46, 0.05); }
+  button.flag-btn.flagged { color: var(--red); border-color: var(--red); background: rgba(207, 34, 46, 0.08); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: #0550ae; border-color: #0550ae; color: #fff; }
+  button.generate { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.generate:hover { background: #0550ae; border-color: #0550ae; color: #fff; }
+  button.danger { color: var(--red); border-color: rgba(207, 34, 46, 0.3); background: var(--panel); }
+  button.danger:hover { background: rgba(207, 34, 46, 0.08); border-color: var(--red); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  button .spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid rgba(0,0,0,0.2); border-top-color: #000; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: -1px; }
+  button .spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: -1px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Correction inline form */
-  .correction-form { display: none; background: rgba(248, 81, 73, 0.04); border: 1px solid rgba(248, 81, 73, 0.25); border-radius: 8px; padding: 14px; margin: 10px 0 4px 0; }
+  .correction-form { display: none; background: rgba(207, 34, 46, 0.03); border: 1px solid rgba(207, 34, 46, 0.2); border-radius: 8px; padding: 14px; margin: 10px 0 4px 0; }
   .correction-form.open { display: block; }
   .correction-form label { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin: 10px 0 6px 0; font-weight: 500; }
   .correction-form label:first-child { margin-top: 0; }
-  .correction-form textarea { width: 100%; min-height: 60px; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: inherit; font-size: 13px; resize: vertical; line-height: 1.5; }
-  .correction-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15); }
+  .correction-form textarea { width: 100%; min-height: 60px; background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: inherit; font-size: 13px; resize: vertical; line-height: 1.5; }
+  .correction-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.18); }
   .correction-form .actions { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; flex-wrap: wrap; }
   .correction-form .actions .left { margin-right: auto; }
   .correction-form .gen-note { color: var(--accent); font-size: 11px; margin-top: 6px; font-style: italic; }
-  .generated-badge { display: inline-flex; align-items: center; padding: 2px 7px; background: rgba(88, 166, 255, 0.12); border: 1px solid rgba(88, 166, 255, 0.4); color: var(--accent); border-radius: 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  .generated-badge { display: inline-flex; align-items: center; padding: 2px 7px; background: rgba(9, 105, 218, 0.1); border: 1px solid rgba(9, 105, 218, 0.4); color: var(--accent); border-radius: 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
 
   /* Corrections list */
   .correction-item { padding: 14px 16px; border-bottom: 1px solid var(--border); }
@@ -143,8 +143,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .correction-item .ts-small { color: var(--text-dimmer); font-size: 11px; font-family: var(--mono); }
   .correction-item .q-label { display: inline-block; color: var(--text-dimmer); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; font-weight: 500; }
   .correction-item .q { font-size: 13px; margin: 6px 0; line-height: 1.5; }
-  .correction-item .wrong-text { color: var(--red); font-size: 12px; background: rgba(248, 81, 73, 0.04); border: 1px solid rgba(248, 81, 73, 0.2); padding: 8px 10px; border-radius: 6px; margin: 6px 0; white-space: pre-wrap; line-height: 1.5; }
-  .correction-item .correct-text { color: var(--green); font-size: 12px; background: rgba(63, 185, 80, 0.04); border: 1px solid rgba(63, 185, 80, 0.2); padding: 8px 10px; border-radius: 6px; margin: 6px 0; white-space: pre-wrap; line-height: 1.5; }
+  .correction-item .wrong-text { color: var(--red); font-size: 12px; background: rgba(207, 34, 46, 0.05); border: 1px solid rgba(207, 34, 46, 0.25); padding: 8px 10px; border-radius: 6px; margin: 6px 0; white-space: pre-wrap; line-height: 1.5; }
+  .correction-item .correct-text { color: var(--green); font-size: 12px; background: rgba(26, 127, 55, 0.05); border: 1px solid rgba(26, 127, 55, 0.25); padding: 8px 10px; border-radius: 6px; margin: 6px 0; white-space: pre-wrap; line-height: 1.5; }
 
   /* Empty states */
   .empty { color: var(--text-dimmer); font-size: 13px; padding: 28px 20px; text-align: center; font-style: italic; }
