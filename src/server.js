@@ -71,11 +71,21 @@ router.get('/agent/recent', (req, res) => {
 
 // Monitoring dashboard. Gated by DASHBOARD_SECRET env var (optional).
 // If set, URL is /dashboard/:secret; if unset, /dashboard is public.
+// CSP is relaxed for this route to allow the inline script/style bundled
+// into the HTML page — helmet's default CSP (`script-src 'self'`) would
+// otherwise block it.
+function sendDashboard(res) {
+  res.set(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+  );
+  res.type('html').send(DASHBOARD_HTML);
+}
 router.get('/dashboard', (_req, res) => {
   if (process.env.DASHBOARD_SECRET) {
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } });
   }
-  res.type('html').send(DASHBOARD_HTML);
+  sendDashboard(res);
 });
 router.get('/dashboard/:secret', (req, res) => {
   const expected = process.env.DASHBOARD_SECRET;
@@ -85,7 +95,7 @@ router.get('/dashboard/:secret', (req, res) => {
   if (req.params.secret !== expected) {
     return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Invalid dashboard secret' } });
   }
-  res.type('html').send(DASHBOARD_HTML);
+  sendDashboard(res);
 });
 
 const chatLimiter = rateLimit({
