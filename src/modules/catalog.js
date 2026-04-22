@@ -562,9 +562,28 @@ export function matchesFilter(product, filter) {
   for (const [k, v] of Object.entries(filter)) {
     if (v === undefined || v === null || v === '') continue;
     if (k === 'budget' || k === 'features' || k === 'size_preference' || k === 'usage' || k === 'model') continue;
+
+    // SPECIAL: if the caller passes `family: "iPhone 17 Pro Max"` but the
+    // product stores family="iPhone 17" and variant="Pro Max" (our convention),
+    // silently split the filter so it matches. Same treatment as if they had
+    // passed model_key directly.
+    if (k === 'family' && typeof v === 'string' && product.model_key && String(product.model_key).toLowerCase() === String(v).toLowerCase()) {
+      continue;
+    }
+
     const pv = product[k];
     if (pv === undefined || pv === null) {
-      if (k === 'family' || k === 'chip') {
+      // Fallback token-in-title match, but ONLY within the same category so
+      // iPhone accessories don't leak into an iPhone phone filter.
+      if (k === 'family' || k === 'chip' || k === 'model_key') {
+        if (filter.category && product.category && String(filter.category).toLowerCase() !== String(product.category).toLowerCase()) {
+          return false;
+        }
+        // Also reject cross-category for common primary filters — if the
+        // caller is clearly asking for a phone (family contains "iPhone")
+        // but the product is an Accessory, bail out.
+        const isPhoneFilter = /\b(iphone|ipad|macbook|imac|apple\s*watch|airpods|homepod|vision)\b/i.test(String(v));
+        if (isPhoneFilter && product.category === 'Accessory') return false;
         const tokens = String(v).toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((t) => t.length >= 2);
         if (tokens.length === 0) return false;
         const allPresent = tokens.every((t) => title.includes(t));
