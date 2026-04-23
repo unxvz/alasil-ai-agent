@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { fetchAllProducts } from './shopify.js';
+import { adminEnabled, fetchAllProductsAdmin } from './shopify-admin.js';
 
 let _cache = null;
 let _loadedAt = 0;
@@ -14,7 +15,21 @@ export async function getCatalog({ refresh = false } = {}) {
   if (_inflight) return _inflight;
   _inflight = (async () => {
     try {
-      const raw = await fetchAllProducts();
+      // Prefer Admin API when configured — gets metafields, per-location
+      // inventory quantities, options, and collections. Falls back to
+      // Storefront on error so we never fully lose access.
+      let raw;
+      if (adminEnabled()) {
+        try {
+          raw = await fetchAllProductsAdmin();
+          logger.info({ count: raw.length, source: 'admin' }, 'catalog fetched via Admin API');
+        } catch (err) {
+          logger.warn({ err: String(err?.message || err) }, 'Admin API fetch failed, falling back to Storefront');
+          raw = await fetchAllProducts();
+        }
+      } else {
+        raw = await fetchAllProducts();
+      }
       const enriched = raw.map(_enrichProduct);
       const wasFirstLoad = _cache === null;
       const prevSkuCount = _cache?.length || 0;
@@ -64,14 +79,16 @@ function _enrichProduct(p) {
   const title = p.title || '';
   const norm = normalizeTitle(title);
   const tagsText = Array.isArray(p.tags) ? p.tags.join(' ') : '';
-  const category = detectCategory(norm, p.productType, p.tags);
-  const family = detectFamily(norm, category);
+  const category = detectCategoryFromAdmin(p) || detectCategory(norm, p.productType, p.tags);
+  const family = detectFamilyFromCollections(p, category) || detectFamily(norm, category);
   const variant = detectVariant(norm, category);
   const chip = detectChip(norm) || detectChip(tagsText) || detectChip(String(p.productType || ''));
-  const storage_gb = detectStorage(norm);
-  const ram_gb = detectRam(norm);
-  const screen_inch = detectScreen(norm);
-  const rawColor = detectColor(title);
+
+  // Prefer admin data (variants options, metafields) over regex extraction.
+  const storage_gb = readVariantOption(p, 'storage') || detectStorage(norm);
+  const ram_gb = readMetafield(p, 'apple.ram_gb') || detectRam(norm);
+  const screen_inch = readMetafield(p, 'apple.screen_inch') || detectScreen(norm);
+  const rawColor = readVariantOption(p, 'color') || detectColor(title);
   const region = detectRegion(norm);
   const sim = detectSim(norm);
   const keyboard_layout = detectKeyboard(norm);
@@ -81,19 +98,19 @@ function _enrichProduct(p) {
     : category === 'Mac'  ? chip
     : null;
 
-  // New fields
-  const material = detectMaterial(category, family);
-  const year = detectYear(category, family, chip);
-  const generation = detectGeneration(category, family, variant);
-  const color = normalizeColor(rawColor, material);
+  // New fields — metafield wins when set, fallback to regex/derivation.
+  const material = readMetafield(p, 'apple.material') || detectMaterial(category, family);
+  const year = readMetafield(p, 'apple.year') || detectYear(category, family, chip);
+  const generation = readMetafield(p, 'apple.generation') || detectGeneration(category, family, variant);
+  const officialColor = readMetafield(p, 'apple.official_color');
+  const color = officialColor || normalizeColor(rawColor, material);
+  const modelKeyOverride = readMetafield(p, 'apple.model_key');
 
   // Canonical model_key: a stable "which exact phone model is this" label.
   // Customer can ask for any of these and the bot knows what to filter on.
-  // For iPhone: "iPhone 17 Pro Max", "iPhone 17 Pro", "iPhone 17", "iPhone Air", "iPhone 17e"
-  // For iPad: "iPad Pro (M5)", "iPad Air (M4)", "iPad mini (A17 Pro)", "iPad (A16)"
-  // For Mac: "MacBook Air (M5)", "MacBook Pro 14 (M5 Pro)", etc.
-  // For Apple Watch: "Apple Watch Series 11", "Apple Watch Ultra 3", etc.
-  const model_key = buildModelKey({ category, family, variant, chip, screen_inch });
+  // Metafield `apple.model_key` wins if the merchant has set it; otherwise
+  // we derive from family + variant.
+  const model_key = modelKeyOverride || buildModelKey({ category, family, variant, chip, screen_inch });
 
   // Canonical category_path: "iPhone > iPhone 17 Pro Max > 256GB > Deep Blue"
   // Gives LLM a deterministic breadcrumb so it can map any customer phrase
@@ -376,6 +393,82 @@ function detectGeneration(category, family, variant) {
     if (m) return m[1];
   }
   return null;
+}
+
+// Prefer Shopify's standardized taxonomy (category_shopify.fullName, set by
+// merchant in 2024+ Shopify) over our regex-based detectCategory.
+function detectCategoryFromAdmin(p) {
+  const full = p?.category_shopify?.fullName;
+  if (!full) return null;
+  // Map Shopify's tree to our internal category labels.
+  const fn = String(full).toLowerCase();
+  if (/mobile\s*phones|smartphones/.test(fn)) return 'iPhone';
+  if (/tablet\s*computers|tablets/.test(fn)) return 'iPad';
+  if (/laptop\s*computers|computers/.test(fn)) return 'Mac';
+  if (/smartwatches?|smart\s*watches/.test(fn)) return 'Apple Watch';
+  if (/earbuds|earphones/.test(fn)) return 'Earbuds';
+  if (/headphones/.test(fn)) return 'Headphones';
+  if (/speakers/.test(fn)) return 'Speaker';
+  if (/monitor|display/.test(fn)) return 'Display';
+  return null;
+}
+
+// Prefer a merchant-curated collection like "iPhone 17 Pro Max" over our
+// regex-based family extraction. We look for collection titles that look like
+// product families (not promotional ones like "Hot Deals" or "BF").
+function detectFamilyFromCollections(p, category) {
+  const cols = Array.isArray(p?.collections) ? p.collections : [];
+  if (cols.length === 0) return null;
+  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?)\b/i;
+  for (const c of cols) {
+    const t = String(c.title || '').trim();
+    if (!t || promos.test(t)) continue;
+    // Heuristic: collection title must contain the category word or a model
+    // number to be treated as a "family" for our catalog taxonomy.
+    if (category && new RegExp('\\b' + category.replace(/\s+/g, '\\s*') + '\\b', 'i').test(t)) return t;
+    if (/iPhone\s*\d{1,2}|iPad\s*(Pro|Air|mini)|MacBook\s*(Air|Pro)|Apple\s*Watch|AirPods/i.test(t)) return t;
+  }
+  return null;
+}
+
+// Extract an option value (like Color / Storage) from Shopify variant metadata
+// when the Admin API exposed it. Returns number for storage_gb, string for color.
+function readVariantOption(p, which) {
+  const vs = Array.isArray(p?.variants) ? p.variants : [];
+  if (vs.length === 0) return null;
+  const target = String(which || '').toLowerCase();
+  // Pick a variant that has the option set (usually the first).
+  for (const v of vs) {
+    const opts = v.options || {};
+    for (const [k, val] of Object.entries(opts)) {
+      const kk = String(k).toLowerCase();
+      if (target === 'color' && /colou?r|finish/.test(kk)) {
+        return String(val).trim();
+      }
+      if (target === 'storage' && /storage|capacity|memory/.test(kk)) {
+        // parse e.g. "256GB", "1TB"
+        const m = String(val).match(/(\d+(?:\.\d+)?)\s*(gb|tb)/i);
+        if (m) {
+          const n = parseFloat(m[1]);
+          return m[2].toLowerCase() === 'tb' ? Math.round(n * 1024) : Math.round(n);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function readMetafield(p, fullKey) {
+  const mf = p?.metafields;
+  if (!mf || typeof mf !== 'object') return null;
+  const entry = mf[fullKey];
+  if (!entry || entry.value === null || entry.value === undefined || entry.value === '') return null;
+  // Convert common types:
+  if (entry.type === 'number_integer' || entry.type === 'number_decimal') {
+    const n = Number(entry.value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return String(entry.value);
 }
 
 function normalizeTitle(t) {

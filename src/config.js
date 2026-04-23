@@ -22,6 +22,10 @@ const schema = z.object({
 
   SHOPIFY_SHOP_DOMAIN: z.string().min(1, 'SHOPIFY_SHOP_DOMAIN is required'),
   SHOPIFY_STOREFRONT_TOKEN: z.string().min(1, 'SHOPIFY_STOREFRONT_TOKEN is required'),
+  // Admin API (optional — if set, catalog prefers it over Storefront for
+  // metafields, real per-location inventory, collections, and options).
+  SHOPIFY_ADMIN_TOKEN: z.string().optional(),
+  SHOPIFY_ADMIN_SHOP_HANDLE: z.string().optional(),
   SHOPIFY_API_VERSION: z.string().default('2024-01'),
   SHOPIFY_CACHE_TTL_SECONDS: z.coerce.number().default(300),
   SHOPIFY_CATALOG_MAX: z.coerce.number().default(1000),

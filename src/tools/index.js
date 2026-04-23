@@ -9,6 +9,7 @@
 
 import { getCatalog, matchesFilter, distinctValues, enrichProduct } from '../modules/catalog.js';
 import { searchProducts as shopifyLiveSearch, verifyStock as shopifyVerifyStock } from '../modules/shopify.js';
+import { adminEnabled, fetchProductAdmin } from '../modules/shopify-admin.js';
 import { addCorrection } from '../modules/corrections.js';
 import { webFetch, WEB_FETCH_KNOWN_TOPICS } from './web-fetch.js';
 import { logger } from '../logger.js';
@@ -792,12 +793,43 @@ async function tool_verifyStock({ handle, sku }) {
   if (!useHandle) return { error: 'handle or sku required (and SKU not found in catalog)' };
 
   try {
-    const fresh = await shopifyVerifyStock(useHandle);
+    // Prefer Admin API — gives actual inventory_quantity per location instead of just a boolean.
+    let fresh = null;
+    let source = 'storefront';
+    if (adminEnabled()) {
+      try {
+        fresh = await fetchProductAdmin(useHandle);
+        if (fresh) source = 'admin';
+      } catch (err) {
+        logger.warn({ err: String(err?.message || err), handle: useHandle }, 'admin verifyStock failed, falling back to storefront');
+      }
+    }
+    if (!fresh) fresh = await shopifyVerifyStock(useHandle);
     if (!fresh) return { error: 'product not found on Shopify', handle: useHandle };
     const enriched = enrichProduct(fresh);
+
+    // If admin returned per-variant inventory, include a detailed breakdown.
+    const perLocation = [];
+    if (Array.isArray(fresh.variants)) {
+      for (const v of fresh.variants) {
+        for (const loc of v.per_location || []) {
+          perLocation.push({
+            variant_sku: v.sku,
+            variant_title: v.title,
+            options: v.options,
+            location: loc.location,
+            available: loc.available,
+          });
+        }
+      }
+    }
+
     return {
       checked_at: new Date().toISOString(),
       in_stock_live: Boolean(enriched.in_stock),
+      source,
+      inventory_total: fresh.inventory_total ?? null,
+      per_location: perLocation,
       product: briefProduct(enriched),
     };
   } catch (err) {
