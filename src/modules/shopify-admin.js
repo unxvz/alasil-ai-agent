@@ -233,22 +233,26 @@ function normalizeAdminProduct(node) {
   const price = parseFloat(firstVar?.price || '0');
   const compareAt = firstVar?.compareAtPrice ? parseFloat(firstVar.compareAtPrice) : null;
 
-  // Sum inventoryQuantity across all variants as a simple "total stock".
-  // Per-variant details preserved in the variants array below.
+  // Prefer inventoryLevels when available (from the full detail query) to
+  // get per-location counts. Otherwise fall back to the variant's
+  // inventoryQuantity (total across locations) which the bulk query exposes
+  // without needing the expensive inventoryLevels subfield.
   let totalQty = 0;
   const variants = [];
   for (const e of variantEdges) {
     const v = e.node;
     const locEdges = v.inventoryItem?.inventoryLevels?.edges || [];
-    const perLocation = locEdges.map((le) => {
-      const levels = le.node.quantities || [];
-      const avail = levels.find((q) => q.name === 'available');
-      return {
-        location: le.node.location?.name,
-        available: Number.isFinite(avail?.quantity) ? avail.quantity : null,
-      };
-    });
-    const variantQty = perLocation.reduce((a, b) => a + (b.available || 0), 0);
+    const perLocation = locEdges.map((le) => ({
+      location: le.node.location?.name,
+      available:
+        le.node.available !== undefined
+          ? Number.isFinite(le.node.available) ? le.node.available : null
+          : Number.isFinite(le.node.quantities?.find?.((q) => q.name === 'available')?.quantity)
+            ? le.node.quantities.find((q) => q.name === 'available').quantity
+            : null,
+    }));
+    const perLocationSum = perLocation.reduce((a, b) => a + (b.available || 0), 0);
+    const variantQty = Number.isFinite(v.inventoryQuantity) ? v.inventoryQuantity : perLocationSum;
     totalQty += variantQty;
     variants.push({
       id: v.id,
@@ -258,7 +262,7 @@ function normalizeAdminProduct(node) {
       price: parseFloat(v.price || '0'),
       compare_at: v.compareAtPrice ? parseFloat(v.compareAtPrice) : null,
       available_for_sale: Boolean(v.availableForSale),
-      inventory_quantity: Number.isFinite(v.inventoryQuantity) ? v.inventoryQuantity : variantQty,
+      inventory_quantity: variantQty,
       per_location: perLocation,
       options: (v.selectedOptions || []).reduce((acc, o) => {
         acc[o.name] = o.value;
@@ -295,7 +299,10 @@ function normalizeAdminProduct(node) {
     price_aed: Number.isFinite(price) ? price : 0,
     compare_at_aed: Number.isFinite(compareAt) ? compareAt : null,
     sku: firstVar?.sku || '',
-    in_stock: Boolean(firstVar?.availableForSale) && totalQty > 0,
+    // in_stock follows Shopify's own logic: the item is sellable iff any
+    // variant is `availableForSale`. inventory_quantity is reported
+    // separately so the agent can say "only 3 left" when it wants to.
+    in_stock: variants.some((v) => v.available_for_sale),
 
     // Admin-only richer fields the bot can use:
     category_shopify: node.category || null, // Shopify standardized taxonomy
