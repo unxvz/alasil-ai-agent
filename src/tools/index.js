@@ -112,6 +112,34 @@ export const tools = [
   {
     type: 'function',
     function: {
+      name: 'findProduct',
+      description:
+        "PRIMARY SHOPPING TOOL. Walks the merchant-curated catalog in the exact order a customer thinks: CATEGORY -> COLLECTION -> PRODUCT. Given the customer's raw phrase (plus any known attrs), it (1) infers the category, (2) matches Shopify collections the merchant actually created for that category, (3) scores products inside the best-matching collection(s) by tag overlap with the phrase + any attrs you pass, and (4) returns top candidates with differentiating specs for customer confirmation. Call this first for any shopping/stock question before other tools. If it returns exactly one high-confidence match, confirm with the customer; if several, show top 3 differences.",
+      parameters: {
+        type: 'object',
+        properties: {
+          customer_message: {
+            type: 'string',
+            description: "The customer's shopping phrase — pass it RAW. Example: 'iphone 17 pro max 256 silver middle east'.",
+          },
+          category: {
+            type: 'string',
+            description: 'Optional — if you already know the category, set it. Otherwise leave empty and the tool will infer.',
+          },
+          storage_gb: { type: 'number' },
+          color: { type: 'string' },
+          region: { type: 'string', enum: ['Middle East', 'International'] },
+          chip: { type: 'string' },
+          max_price_aed: { type: 'number' },
+          limit: { type: 'number', default: 4, description: 'Max candidates. Default 4.' },
+        },
+        required: ['customer_message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'browseMenu',
       description:
         "Step-by-step menu navigation — returns the next level of choices given what the customer has specified so far. Use this when the customer gives a broad hint ('iphone') and you need to walk them through the decision tree (model → storage → color → region). Returns a list of the next-level options that actually have in-stock SKUs. Much cleaner than raw searchProducts when the customer is still narrowing.",
@@ -301,6 +329,9 @@ export async function executeTool(name, args) {
         break;
       case 'webFetch':
         result = await webFetch(args || {});
+        break;
+      case 'findProduct':
+        result = await tool_findProduct(args || {});
         break;
       case 'browseMenu':
         result = await tool_browseMenu(args || {});
@@ -627,6 +658,155 @@ async function tool_getBySKU({ sku }) {
     products: matches.map(briefProduct),
     count: matches.length,
   };
+}
+
+// Category/keyword → collection → product flow. Mirrors how a customer thinks:
+//   "i need iphone pro max"  →  category: iPhone
+//                             →  collection: "iPhone 17 Pro Max"
+//                             →  products in that collection
+//                             →  narrow by any attrs given
+async function tool_findProduct(args = {}) {
+  const { customer_message, category: hintCategory, storage_gb, color, region, chip, max_price_aed, limit = 4 } = args;
+  if (!customer_message) return { error: 'customer_message is required' };
+
+  const msg = String(customer_message).toLowerCase();
+  const tokens = msg.replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((t) => t.length >= 2);
+  const tokenSet = new Set(tokens);
+
+  // ── STEP 1: infer category from message keywords (or use hint) ──
+  const category = hintCategory || inferCategoryFromMessage(msg);
+  if (!category) {
+    return {
+      step: 'category_unknown',
+      hint: 'Could not infer a category from the message. Ask the customer what they are shopping for (iPhone, iPad, Mac, Apple Watch, AirPods, etc.) or call browseMenu() with no args.',
+    };
+  }
+
+  const catalog = await getCatalog();
+  let pool = catalog.filter((p) => p.category === category && p.in_stock !== false);
+  if (pool.length === 0) {
+    return {
+      step: 'no_stock_in_category',
+      category,
+      hint: `No in-stock ${category} products right now.`,
+    };
+  }
+
+  // ── STEP 2: score collections (merchant-curated) against message tokens ──
+  const collectionScore = new Map(); // title -> { score, products: Set<id> }
+  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand|previous\s*models?|older\s*models?)\b/i;
+  for (const p of pool) {
+    for (const c of p.collections || []) {
+      const t = String(c.title || '').trim();
+      if (!t || promos.test(t)) continue;
+      let s = 0;
+      const tl = t.toLowerCase();
+      const tTokens = tl.replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((x) => x.length >= 2);
+      for (const tok of tTokens) if (tokenSet.has(tok)) s += 5;
+      // Bonus for model-specific collection titles
+      if (/iphone\s*\d{1,2}\s*(pro\s*max|pro|plus|mini|air|e)/.test(tl)) s += 3;
+      if (/iphone\s*(air|se)\b/.test(tl)) s += 3;
+      if (/ipad\s*(pro|air|mini)/.test(tl)) s += 3;
+      if (/macbook\s*(air|pro)|mac\s*(studio|mini)|imac/.test(tl)) s += 3;
+      if (/apple\s*watch\s*(series|ultra|se)/.test(tl)) s += 3;
+      if (/airpods\s*(pro|max|\d)/.test(tl)) s += 3;
+      if (s > 0) {
+        if (!collectionScore.has(t)) collectionScore.set(t, { score: 0, products: new Set() });
+        const entry = collectionScore.get(t);
+        entry.score = Math.max(entry.score, s);
+        entry.products.add(p.id);
+      }
+    }
+  }
+
+  // ── STEP 3: pick top collection(s) and filter products inside ──
+  const topCollections = [...collectionScore.entries()]
+    .sort((a, b) => b[1].score - a[1].score)
+    .slice(0, 3)
+    .filter(([, info]) => info.score > 0);
+
+  let candidates;
+  let used_collection = null;
+  if (topCollections.length > 0) {
+    const best = topCollections[0];
+    used_collection = best[0];
+    candidates = pool.filter((p) => best[1].products.has(p.id));
+  } else {
+    // No collection match — fall back to the whole category.
+    candidates = pool;
+  }
+
+  // ── STEP 4: narrow by tags + provided attrs ──
+  if (storage_gb) candidates = candidates.filter((p) => p.storage_gb === storage_gb);
+  if (color) candidates = candidates.filter((p) => String(p.color || '').toLowerCase().includes(String(color).toLowerCase()));
+  if (region) candidates = candidates.filter((p) => p.region === region);
+  if (chip) candidates = candidates.filter((p) => String(p.chip || '').toLowerCase().includes(String(chip).toLowerCase()));
+  if (Number.isFinite(max_price_aed)) candidates = candidates.filter((p) => Number.isFinite(p.price_aed) && p.price_aed <= max_price_aed);
+
+  // Score remaining by tag overlap with message
+  const scored = candidates.map((p) => {
+    const tagText = (p.tags || []).join(' ').toLowerCase();
+    const haystack = `${String(p.title || '').toLowerCase()} ${tagText}`;
+    let tagHits = 0;
+    for (const tok of tokens) if (haystack.includes(tok)) tagHits++;
+    return { p, tagHits };
+  });
+  scored.sort((a, b) => b.tagHits - a.tagHits || (a.p.price_aed || 0) - (b.p.price_aed || 0));
+
+  const cap = Math.min(10, Math.max(1, Number(limit) || 4));
+  const top = scored.slice(0, cap).map((x) => briefProduct(x.p));
+
+  // Build a confirmation-friendly response
+  const confidence = top.length === 0 ? 'none' : top.length === 1 ? 'high' : 'medium';
+  return {
+    step: 'candidates',
+    category,
+    used_collection,
+    nearby_collections: topCollections.map(([title, info]) => ({ title, products: info.products.size })),
+    candidates: top,
+    count_total: scored.length,
+    confidence,
+    confirmation_hint:
+      top.length === 0
+        ? `No ${category} matches for "${customer_message}" with the given filters. Ask customer to loosen one filter or offer closest alternatives.`
+        : top.length === 1
+          ? `Exactly one candidate — confirm with customer before treating as final. Show title + price + 1 differentiating spec.`
+          : `${top.length} candidates — show 2-3 with differentiating specs (storage/color/region) and ask customer which one.`,
+  };
+}
+
+// Keyword → internal category. Conservative: only fires when a strong anchor
+// word is present. Returns null when not clear (agent should ask).
+function inferCategoryFromMessage(msg) {
+  const s = String(msg || '').toLowerCase();
+  // Accessory words take priority — "iphone 17 case" should land in Accessory
+  if (/\b(case|cover|folio|sleeve|band|strap|loop|charger|cable|adapter|screen\s*protector|tempered\s*glass|airtag|dock|stand|grip|kickstand|pencil|magic\s*(keyboard|mouse|trackpad)|magsafe)\b/.test(s)) {
+    // BUT: "pencil" on its own is not always an accessory — if it's "apple pencil",
+    // we still classify as Accessory (it's a separate SKU). Leave Accessory.
+    if (/\b(case|cover|folio|sleeve|band|strap|loop|charger|cable|adapter|screen\s*protector|tempered\s*glass|airtag|dock|stand|grip|kickstand|pencil|magic|magsafe)\b/.test(s)) {
+      return 'Accessory';
+    }
+  }
+  if (/\biphone\b/.test(s)) return 'iPhone';
+  if (/\bipad\b/.test(s)) return 'iPad';
+  if (/\b(macbook|imac|mac\s*(mini|studio))\b/.test(s)) return 'Mac';
+  if (/\bapple\s*watch\b|\bwatch\s*(ultra|series|se)\b/.test(s)) return 'Apple Watch';
+  if (/\bairpods?\b/.test(s)) return 'AirPods';
+  if (/\bvision\s*pro\b/.test(s)) return 'Vision Pro';
+  if (/\bhomepod\b/.test(s)) return 'HomePod';
+  if (/\bapple\s*tv\b/.test(s)) return 'Apple TV';
+  if (/\b(studio|pro)\s*display\b/.test(s)) return 'Display';
+  if (/\bdyson\b|\bairwrap\b|\bsupersonic\b|\bcorrale\b/.test(s)) return 'Dyson';
+  if (/\b(jbl|bose|sony|harman|beats|shokz|sennheiser|jabra)\b/.test(s)) {
+    if (/\b(speaker|boombox|flip|charge|go|clip|xtreme|partybox|soundlink|pulse)\b/.test(s)) return 'Speaker';
+    if (/\b(earbud|buds|tws|tune\s*flex|wf-)\b/.test(s)) return 'Earbuds';
+    if (/\b(headphone|over[-\s]?ear|quietcomfort(?!\s*earbuds)|wh-|studio\s*pro|solo)\b/.test(s)) return 'Headphones';
+    return null; // ambiguous — let agent ask
+  }
+  if (/\b(ninja|cosori|air\s*fryer)\b/.test(s)) return 'Home Appliance';
+  if (/\bformovie|projector\b/.test(s)) return 'Projector';
+  if (/\bgift\s*card\b/.test(s)) return 'Gift Card';
+  return null;
 }
 
 // Menu browser — given what the customer has chosen so far, return the next
