@@ -9,52 +9,80 @@ let _inflight = null;
 
 const TTL_MS = config.SHOPIFY_CACHE_TTL_SECONDS * 1000;
 
-export async function getCatalog({ refresh = false } = {}) {
-  const now = Date.now();
-  if (!refresh && _cache && now - _loadedAt < TTL_MS) return _cache;
-  if (_inflight) return _inflight;
-  _inflight = (async () => {
-    try {
-      // Prefer Admin API when configured — gets metafields, per-location
-      // inventory quantities, options, and collections. Falls back to
-      // Storefront on error so we never fully lose access.
-      let raw;
-      if (adminEnabled()) {
-        try {
-          raw = await fetchAllProductsAdmin();
-          logger.info({ count: raw.length, source: 'admin' }, 'catalog fetched via Admin API');
-        } catch (err) {
-          logger.warn({ err: String(err?.message || err) }, 'Admin API fetch failed, falling back to Storefront');
-          raw = await fetchAllProducts();
-        }
-      } else {
+// Background refresh worker — does the actual Shopify fetch + enrichment.
+// Never throws to the caller; errors are logged.
+async function _refreshCatalog() {
+  try {
+    let raw;
+    if (adminEnabled()) {
+      try {
+        raw = await fetchAllProductsAdmin();
+        logger.info({ count: raw.length, source: 'admin' }, 'catalog fetched via Admin API');
+      } catch (err) {
+        logger.warn({ err: String(err?.message || err) }, 'Admin API fetch failed, falling back to Storefront');
         raw = await fetchAllProducts();
       }
-      const enriched = raw.map(_enrichProduct);
-      const wasFirstLoad = _cache === null;
-      const prevSkuCount = _cache?.length || 0;
-      _cache = enriched;
-      _loadedAt = Date.now();
-      logger.info({ count: enriched.length }, 'Shopify catalog loaded');
-      // Auto-rebuild the taxonomy file whenever the catalog refreshes AND the
-      // set of products changed. Runs async — we don't block the caller.
-      if (wasFirstLoad || prevSkuCount !== enriched.length) {
-        Promise.resolve().then(async () => {
-          try {
-            const { buildTaxonomyFromCatalog } = await import('../../scripts/build-taxonomy.js');
-            const res = buildTaxonomyFromCatalog(enriched);
-            logger.info({ path: res.path, lines: res.lines, inStock: res.inStock }, 'taxonomy auto-rebuilt');
-          } catch (err) {
-            logger.warn({ err: String(err?.message || err) }, 'taxonomy auto-rebuild failed');
-          }
-        });
-      }
-      return enriched;
-    } finally {
-      _inflight = null;
+    } else {
+      raw = await fetchAllProducts();
     }
-  })();
-  return _inflight;
+    const enriched = raw.map(_enrichProduct);
+    const wasFirstLoad = _cache === null;
+    const prevSkuCount = _cache?.length || 0;
+    _cache = enriched;
+    _loadedAt = Date.now();
+    logger.info({ count: enriched.length }, 'Shopify catalog loaded');
+
+    if (wasFirstLoad || prevSkuCount !== enriched.length) {
+      Promise.resolve().then(async () => {
+        try {
+          const { buildTaxonomyFromCatalog } = await import('../../scripts/build-taxonomy.js');
+          const res = buildTaxonomyFromCatalog(enriched);
+          logger.info({ path: res.path, lines: res.lines, inStock: res.inStock }, 'taxonomy auto-rebuilt');
+        } catch (err) {
+          logger.warn({ err: String(err?.message || err) }, 'taxonomy auto-rebuild failed');
+        }
+      });
+    }
+    return enriched;
+  } catch (err) {
+    logger.error({ err: String(err?.message || err) }, 'catalog refresh failed');
+    throw err;
+  } finally {
+    _inflight = null;
+  }
+}
+
+// getCatalog returns the cached data IMMEDIATELY if we have any, even if
+// stale. If stale (past TTL) we kick off a background refresh so the NEXT
+// call sees fresh data. User-facing requests never wait 60+ seconds for a
+// catalog refetch — that was causing very slow bot replies.
+//
+// Only when there is no cache at all (first call after boot) do we await
+// the fetch. { refresh: true } also awaits, used by the admin / audit script.
+export async function getCatalog({ refresh = false } = {}) {
+  const now = Date.now();
+  const isStale = !_cache || (now - _loadedAt >= TTL_MS);
+
+  if (refresh) {
+    if (_inflight) return _inflight;
+    _inflight = _refreshCatalog();
+    return _inflight;
+  }
+
+  // No cache yet — we have to wait.
+  if (!_cache) {
+    if (_inflight) return _inflight;
+    _inflight = _refreshCatalog();
+    return _inflight;
+  }
+
+  // Stale but usable: kick off refresh in background, return stale data now.
+  if (isStale && !_inflight) {
+    _inflight = _refreshCatalog();
+    // Do NOT await. Fire-and-forget.
+    _inflight.catch(() => {});
+  }
+  return _cache;
 }
 
 export async function refreshCatalog() {
