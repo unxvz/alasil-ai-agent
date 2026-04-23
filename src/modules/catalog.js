@@ -448,7 +448,7 @@ function detectCategoryFromAdmin(p) {
 function detectFamilyFromCollections(p, category) {
   const cols = Array.isArray(p?.collections) ? p.collections : [];
   if (cols.length === 0) return null;
-  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand)\b/i;
+  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand|previous\s*models?|older\s*models?|legacy|vintage|older\s*generation|refurbished|accessor(y|ies))\b/i;
 
   // Score each collection; higher score = more specific.
   const scored = [];
@@ -457,21 +457,26 @@ function detectFamilyFromCollections(p, category) {
     if (!t) continue;
     if (promos.test(t)) continue;
     let score = 0;
-    // Specific model signals
-    if (/iPhone\s*\d{1,2}\s*(Pro\s*Max|Pro|Plus|Mini|Air|e)\b/i.test(t)) score += 100;
-    if (/iPhone\s*Air|iPhone\s*SE/i.test(t)) score += 100;
+    // Specific model with variant (e.g. "iPhone 17 Pro Max")
+    if (/iPhone\s*\d{1,2}\s*(Pro\s*Max|Pro|Plus|Mini|e)\b/i.test(t)) score += 120;
+    // iPhone Air / iPhone SE special
+    if (/iPhone\s*(Air|SE)\b/i.test(t)) score += 120;
+    // Bare "iPhone <number>" without a variant suffix — still specific
+    if (score === 0 && /^iPhone\s*\d{1,2}\s*$/i.test(t)) score += 100;
+    // iPad / Mac / Watch model-specific
     if (/iPad\s*(Pro|Air|Mini)/i.test(t)) score += 80;
     if (/MacBook\s*(Air|Pro)|Mac\s*Studio|Mac\s*mini|iMac/i.test(t)) score += 80;
     if (/Apple\s*Watch\s*(Series\s*\d+|Ultra\s*\d*|SE\s*\d*)/i.test(t)) score += 80;
     if (/AirPods\s*(Pro\s*\d*|Max|4|3|2)/i.test(t)) score += 80;
-    // Series-level
-    if (/Series\b/i.test(t)) score += 40;
-    // Generic category
-    if (category && new RegExp('^\\s*' + category.replace(/\s+/g, '\\s*') + '\\s*$', 'i').test(t)) score += 5;
-    // Penalty: only partial category match (just contains the word)
-    if (score === 0 && category && new RegExp('\\b' + category.replace(/\s+/g, '\\s*') + '\\b', 'i').test(t)) score += 10;
-    // Length tiebreaker — longer, more specific titles win within same tier
-    score += t.length * 0.1;
+    // Series-level (only if no specific model scored)
+    if (score === 0 && /(\d{1,2}\s*Series\b|Series\s*\d{1,2})/i.test(t)) score += 40;
+    // Exact category match — use only if nothing else scored
+    if (score === 0 && category && new RegExp('^\\s*' + category.replace(/\s+/g, '\\s*') + '\\s*$', 'i').test(t)) score += 5;
+    // Partial category match — last resort
+    if (score === 0 && category && new RegExp('\\b' + category.replace(/\s+/g, '\\s*') + '\\b', 'i').test(t)) score += 3;
+    if (score === 0) continue;
+    // Length tiebreaker
+    score += t.length * 0.05;
     scored.push({ title: t, score });
   }
   if (scored.length === 0) return null;
