@@ -112,7 +112,14 @@ function _enrichProduct(p) {
   // Shopify's standardized `category` taxonomy is a fallback; merchants often
   // mis-tag AirPods as "Headphones", and title beats that every time.
   const category = detectCategory(norm, p.productType, p.tags) || detectCategoryFromAdmin(p);
-  const family = detectFamilyFromCollections(p, category) || detectFamily(norm, category);
+  // For Mac (MacBook Air / Pro / Neo, Mac mini, Mac Studio, iMac), title-based
+  // detection is more reliable than merchant collections, which sometimes
+  // merge product lines (e.g. "Mac Studio & Mac mini"). For all other
+  // categories, the merchant-curated collection is the best signal.
+  const titleFamily = detectFamily(norm, category);
+  const family = category === 'Mac'
+    ? (titleFamily || detectFamilyFromCollections(p, category))
+    : (detectFamilyFromCollections(p, category) || titleFamily);
   const variant = detectVariant(norm, category);
   const chip = detectChip(norm) || detectChip(tagsText) || detectChip(String(p.productType || ''));
 
@@ -225,9 +232,14 @@ function buildModelKey({ category, family, variant, chip, screen_inch }) {
     return family;
   }
   if (category === 'Mac') {
-    const sizeStr = screen_inch ? `${screen_inch}"` : null;
+    // Normalize MacBook sizes: 13.3 / 13.6 → 13", 14.2 → 14", 15.3 → 15",
+    // 16.2 → 16", 24.0 → 24". The merchant's titles sometimes say 13.6"
+    // and sometimes 13" for the same-generation product; rounding to
+    // integer makes them comparable.
+    const sizeNum = Number.isFinite(screen_inch) ? Math.floor(screen_inch) : null;
+    const sizeStr = sizeNum ? `${sizeNum}"` : null;
     const parts = [family];
-    if (sizeStr && !alreadyHas(sizeStr)) parts.push(sizeStr);
+    if (sizeStr && !alreadyHas(sizeStr) && !alreadyHas(`${screen_inch}"`)) parts.push(sizeStr);
     if (chip && !alreadyHas(chip)) parts.push(`(${chip})`);
     return parts.join(' ');
   }
@@ -496,6 +508,9 @@ function detectFamilyFromCollections(p, category) {
     const t = String(c.title || '').trim();
     if (!t) continue;
     if (promos.test(t)) continue;
+    // Skip merged collections like "Mac Studio & Mac mini" — they mix two
+    // product lines and would mis-classify every item inside.
+    if (/\s&\s|\sand\s/i.test(t)) continue;
     let score = 0;
     // Specific model with variant (e.g. "iPhone 17 Pro Max")
     if (/iPhone\s*\d{1,2}\s*(Pro\s*Max|Pro|Plus|Mini|e)\b/i.test(t)) score += 120;
@@ -672,11 +687,12 @@ function detectFamily(t, category) {
     return 'iPad';
   }
   if (category === 'Mac') {
-    if (/\bmacbook\s*pro\b/i.test(t))  return 'MacBook Pro';
-    if (/\bmacbook\s*air\b/i.test(t))  return 'MacBook Air';
-    if (/\bmac\s*mini\b/i.test(t))     return 'Mac mini';
-    if (/\bmac\s*studio\b/i.test(t))   return 'Mac Studio';
-    if (/\bimac\b/i.test(t))           return 'iMac';
+    if (/\bmacbook\s*pro\b/i.test(t))      return 'MacBook Pro';
+    if (/\bmacbook\s*air\b/i.test(t))      return 'MacBook Air';
+    if (/\bmacbook\s*neo\b/i.test(t))      return 'MacBook Neo';
+    if (/\bmac\s*mini\b/i.test(t))         return 'Mac mini';
+    if (/\bmac\s*studio\b/i.test(t))       return 'Mac Studio';
+    if (/\bimac\b/i.test(t))               return 'iMac';
   }
   if (category === 'AirPods') {
     const maxGen = t.match(/\bairpods\s*max\s*\(?(\d+)(?:nd|rd|st|th)?\s*(?:generation|gen)\)?/i) || t.match(/\bairpods\s*max\s+(\d+)\b/i);
