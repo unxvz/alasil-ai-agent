@@ -175,27 +175,35 @@ function extractExtraSpecs(p) {
 
 // Build a human-readable "model_key" that uniquely identifies the phone/ipad/mac/watch
 // line, separate from variants-within-line (storage, color, region, etc).
+// When the merchant-curated family (from a Shopify collection) already
+// contains the variant (e.g. family="iPhone 17 Pro Max" already has "Pro Max"),
+// we skip the concatenation to avoid "iPhone 17 Pro Max Pro Max" duplication.
 function buildModelKey({ category, family, variant, chip, screen_inch }) {
   if (!family) return null;
+  const famLower = String(family).toLowerCase();
+  const alreadyHas = (piece) => famLower.includes(String(piece || '').toLowerCase());
+
   if (category === 'iPhone') {
-    // Merge family + variant — "iPhone 17" + "Pro Max" → "iPhone 17 Pro Max"
     if (!variant || variant === 'Standard' || variant === 'Air') return family;
+    if (alreadyHas(variant)) return family;
     return `${family} ${variant}`;
   }
   if (category === 'iPad') {
-    if (chip) return `${family} (${chip})`;
+    if (chip && !alreadyHas(chip)) return `${family} (${chip})`;
     return family;
   }
   if (category === 'Mac') {
-    if (screen_inch && chip) return `${family} ${screen_inch}" (${chip})`;
-    if (chip) return `${family} (${chip})`;
-    return family;
+    const sizeStr = screen_inch ? `${screen_inch}"` : null;
+    const parts = [family];
+    if (sizeStr && !alreadyHas(sizeStr)) parts.push(sizeStr);
+    if (chip && !alreadyHas(chip)) parts.push(`(${chip})`);
+    return parts.join(' ');
   }
   if (category === 'Apple Watch') {
-    return family; // e.g. "Apple Watch Series 11"
+    return family;
   }
   if (category === 'AirPods') {
-    return family; // "AirPods 4", "AirPods Pro 3", etc.
+    return family;
   }
   return family;
 }
