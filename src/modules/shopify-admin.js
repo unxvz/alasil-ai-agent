@@ -51,7 +51,9 @@ async function gql(query, variables) {
     }
     const data = await resp.json();
     if (data.errors) {
-      throw new UpstreamError('Shopify Admin GraphQL error', { errors: data.errors });
+      const firstMsg = Array.isArray(data.errors) ? (data.errors[0]?.message || JSON.stringify(data.errors[0])) : String(data.errors);
+      logger.warn({ graphql_errors: data.errors, cost: data.extensions?.cost }, 'admin graphql errors');
+      throw new UpstreamError('Shopify Admin GraphQL error: ' + String(firstMsg).slice(0, 200), { errors: data.errors });
     }
     return data.data;
   } catch (err) {
@@ -73,6 +75,47 @@ export async function pingAdmin() {
   }
 }
 
+// Compact fields for bulk catalog pulls — keeps GraphQL cost per product
+// low so a 50-page fetch stays inside the 1000-cost-per-sec leaky bucket.
+const ADMIN_BULK_FIELDS = `
+  id
+  legacyResourceId
+  handle
+  title
+  vendor
+  productType
+  tags
+  status
+  onlineStoreUrl
+  category { fullName }
+  options { name values }
+  featuredImage { url }
+  collections(first: 8) {
+    edges { node { handle title } }
+  }
+  metafields(first: 25) {
+    edges {
+      node { namespace key type value }
+    }
+  }
+  variants(first: 5) {
+    edges {
+      node {
+        id
+        sku
+        title
+        price
+        compareAtPrice
+        availableForSale
+        inventoryQuantity
+        selectedOptions { name value }
+      }
+    }
+  }
+`;
+
+// Full detail including per-location inventory — used for single-product
+// lookups (verifyStock).
 const ADMIN_PRODUCT_FIELDS = `
   id
   legacyResourceId
@@ -87,21 +130,14 @@ const ADMIN_PRODUCT_FIELDS = `
   updatedAt
   publishedAt
   description
-  category { id name fullName }
-  options { id name position values }
+  category { fullName }
+  options { name values }
   featuredImage { url }
   collections(first: 10) {
-    edges { node { id handle title } }
+    edges { node { handle title } }
   }
-  metafields(first: 20) {
-    edges {
-      node {
-        namespace
-        key
-        type
-        value
-      }
-    }
+  metafields(first: 30) {
+    edges { node { namespace key type value } }
   }
   variants(first: 100) {
     edges {
@@ -118,12 +154,11 @@ const ADMIN_PRODUCT_FIELDS = `
         inventoryItem {
           id
           tracked
-          measurement { weight { value unit } }
           inventoryLevels(first: 10) {
             edges {
               node {
                 location { id name }
-                quantities(names: ["available", "committed", "on_hand"]) { name quantity }
+                available
               }
             }
           }
@@ -133,19 +168,20 @@ const ADMIN_PRODUCT_FIELDS = `
   }
 `;
 
-// Paginate through ALL products. Admin API GraphQL cost ≈ 10 per product ×
-// 250 per page = 2500 cost per page; default cost bucket is 1000/sec with
-// 2000/sec burst — we pace requests conservatively.
+// Paginate through ALL products. Admin API GraphQL cost is per-field:
+// with our slim bulk query each product costs ~30 points, so 25/page × 30 =
+// ~750 cost per request — well under the 1000-point bucket. We pace 300ms
+// between pages so the bucket refills.
 export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX || 5000 } = {}) {
   const out = [];
   let cursor = null;
   let hasNext = true;
-  const pageSize = 50; // smaller page keeps Admin cost per request well under the limit
+  const pageSize = 25;
   while (hasNext && out.length < max) {
     const q = `
       query($first: Int!, $after: String) {
         products(first: $first, after: $after) {
-          edges { cursor node { ${ADMIN_PRODUCT_FIELDS} } }
+          edges { cursor node { ${ADMIN_BULK_FIELDS} } }
           pageInfo { hasNextPage }
         }
       }
@@ -158,8 +194,7 @@ export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX |
     }
     hasNext = Boolean(data.products.pageInfo?.hasNextPage) && edges.length > 0;
     cursor = edges.length ? edges[edges.length - 1].cursor : null;
-    // tiny pace so we don't trip the leaky-bucket cost limit on bulk pulls
-    if (hasNext) await new Promise((r) => setTimeout(r, 250));
+    if (hasNext) await new Promise((r) => setTimeout(r, 300));
   }
   return out;
 }
