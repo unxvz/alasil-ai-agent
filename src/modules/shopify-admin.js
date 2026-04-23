@@ -52,8 +52,12 @@ async function gql(query, variables) {
     const data = await resp.json();
     if (data.errors) {
       const firstMsg = Array.isArray(data.errors) ? (data.errors[0]?.message || JSON.stringify(data.errors[0])) : String(data.errors);
-      logger.warn({ graphql_errors: data.errors, cost: data.extensions?.cost }, 'admin graphql errors');
-      throw new UpstreamError('Shopify Admin GraphQL error: ' + String(firstMsg).slice(0, 200), { errors: data.errors });
+      const isThrottle = /throttl/i.test(String(firstMsg)) || data.errors?.some?.((e) => e?.extensions?.code === 'THROTTLED');
+      logger.warn({ graphql_errors: data.errors, cost: data.extensions?.cost, throttled: isThrottle }, 'admin graphql errors');
+      const err = new UpstreamError('Shopify Admin GraphQL error: ' + String(firstMsg).slice(0, 200), { errors: data.errors });
+      err.throttled = isThrottle;
+      err.throttleStatus = data.extensions?.cost?.throttleStatus;
+      throw err;
     }
     return data.data;
   } catch (err) {
@@ -168,15 +172,17 @@ const ADMIN_PRODUCT_FIELDS = `
   }
 `;
 
-// Paginate through ALL products. Admin API GraphQL cost is per-field:
-// with our slim bulk query each product costs ~30 points, so 25/page × 30 =
-// ~750 cost per request — well under the 1000-point bucket. We pace 300ms
-// between pages so the bucket refills.
+// Paginate through ALL products. GraphQL cost per page is ~158 points.
+// The leaky-bucket refills at 100 points/sec (2000 max). We wait between
+// pages based on the last response's throttleStatus so we never hit
+// THROTTLED, and if we do, we back off and retry.
 export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX || 5000 } = {}) {
   const out = [];
   let cursor = null;
   let hasNext = true;
   const pageSize = 25;
+  let lastCost = null;
+
   while (hasNext && out.length < max) {
     const q = `
       query($first: Int!, $after: String) {
@@ -186,7 +192,29 @@ export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX |
         }
       }
     `;
-    const data = await gql(q, { first: pageSize, after: cursor });
+
+    let data;
+    let attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        data = await gql(q, { first: pageSize, after: cursor });
+        break;
+      } catch (err) {
+        if (err?.throttled && attempt <= 5) {
+          // Wait until the bucket has enough budget, plus safety padding.
+          const available = err.throttleStatus?.currentlyAvailable || 0;
+          const restore = err.throttleStatus?.restoreRate || 100;
+          const needed = 200; // bulk request costs ~158, ask for headroom
+          const waitMs = Math.ceil(Math.max(1000, ((needed - available) / restore) * 1000 + 500));
+          logger.warn({ attempt, available, restore, waitMs }, 'admin throttled, waiting');
+          await new Promise((r) => setTimeout(r, Math.min(waitMs, 10_000)));
+          continue;
+        }
+        throw err;
+      }
+    }
+
     const edges = data.products.edges || [];
     for (const e of edges) {
       out.push(normalizeAdminProduct(e.node));
@@ -194,7 +222,10 @@ export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX |
     }
     hasNext = Boolean(data.products.pageInfo?.hasNextPage) && edges.length > 0;
     cursor = edges.length ? edges[edges.length - 1].cursor : null;
-    if (hasNext) await new Promise((r) => setTimeout(r, 300));
+
+    // Pace based on last response's throttle status (if surfaced by extensions).
+    // Default 500ms between pages — enough for 50 point regen per pause.
+    if (hasNext) await new Promise((r) => setTimeout(r, 500));
   }
   return out;
 }
