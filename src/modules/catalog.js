@@ -85,9 +85,11 @@ function _enrichProduct(p) {
   const chip = detectChip(norm) || detectChip(tagsText) || detectChip(String(p.productType || ''));
 
   // Prefer admin data (variants options, metafields) over regex extraction.
+  // alAsil's Shopify uses `custom.*` namespace for most specs. Check both
+  // `apple.*` (our suggested convention) and `custom.*` (merchant's existing).
   const storage_gb = readVariantOption(p, 'storage') || detectStorage(norm);
-  const ram_gb = readMetafield(p, 'apple.ram_gb') || detectRam(norm);
-  const screen_inch = readMetafield(p, 'apple.screen_inch') || detectScreen(norm);
+  const ram_gb = readMetafield(p, 'apple.ram_gb') || readMetafield(p, 'custom.ram_gb') || detectRam(norm);
+  const screen_inch = readMetafield(p, 'apple.screen_inch') || readMetafield(p, 'custom.screen_inch') || detectScreen(norm);
   const rawColor = readVariantOption(p, 'color') || detectColor(title);
   const region = detectRegion(norm);
   const sim = detectSim(norm);
@@ -99,12 +101,14 @@ function _enrichProduct(p) {
     : null;
 
   // New fields — metafield wins when set, fallback to regex/derivation.
-  const material = readMetafield(p, 'apple.material') || detectMaterial(category, family);
-  const year = readMetafield(p, 'apple.year') || detectYear(category, family, chip);
-  const generation = readMetafield(p, 'apple.generation') || detectGeneration(category, family, variant);
-  const officialColor = readMetafield(p, 'apple.official_color');
+  const material = readMetafield(p, 'apple.material') || readMetafield(p, 'custom.material') || detectMaterial(category, family);
+  const year = readMetafield(p, 'apple.year') || readMetafield(p, 'custom.year') || detectYear(category, family, chip);
+  const generation = readMetafield(p, 'apple.generation') || readMetafield(p, 'custom.generation') || detectGeneration(category, family, variant);
+  const officialColor = readMetafield(p, 'apple.official_color') || readMetafield(p, 'custom.official_color');
   const color = officialColor || normalizeColor(rawColor, material);
-  const modelKeyOverride = readMetafield(p, 'apple.model_key');
+  const modelKeyOverride = readMetafield(p, 'apple.model_key') || readMetafield(p, 'custom.model_key');
+  // Merchant's existing metafields we can expose to the agent as spec facts
+  const extra_specs = extractExtraSpecs(p);
 
   // Canonical model_key: a stable "which exact phone model is this" label.
   // Customer can ask for any of these and the bot knows what to filter on.
@@ -142,8 +146,31 @@ function _enrichProduct(p) {
     year,
     generation,
     category_path,
+    extra_specs,
     features: { storage_gb, ram_gb, screen_inch },
   };
+}
+
+// Pull the merchant's useful spec metafields (chip_model, battery_life, etc.)
+// into a clean dict so the agent can reason over them in one place.
+function extractExtraSpecs(p) {
+  const mf = p?.metafields;
+  if (!mf || typeof mf !== 'object') return null;
+  const wanted = [
+    'chip_model', 'battery_capacity', 'battery_life', 'display_type', 'brightness',
+    'cpu_cores', 'charger_type', 'fast_charging', 'front_camera', 'rear_camera',
+    'biometric_authentication', 'bluetooth', 'gps', 'sim_type', 'water_resistance',
+    'always_on_display', 'expandable_storage', 'condition', 'operating_system',
+    'refresh_rate', 'resolution', 'ports', 'weight', 'wifi_standard',
+  ];
+  const out = {};
+  for (const key of wanted) {
+    const entry = mf[`custom.${key}`] || mf[`apple.${key}`];
+    if (entry && entry.value !== null && entry.value !== '') {
+      out[key] = entry.value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 // Build a human-readable "model_key" that uniquely identifies the phone/ipad/mac/watch
@@ -414,21 +441,42 @@ function detectCategoryFromAdmin(p) {
 }
 
 // Prefer a merchant-curated collection like "iPhone 17 Pro Max" over our
-// regex-based family extraction. We look for collection titles that look like
-// product families (not promotional ones like "Hot Deals" or "BF").
+// regex-based family extraction. We rank collections by specificity: a
+// collection that names a full model (iPhone 17 Pro Max) beats a series
+// collection (iPhone 17 Series) which beats a category-only collection
+// (iPhone).
 function detectFamilyFromCollections(p, category) {
   const cols = Array.isArray(p?.collections) ? p.collections : [];
   if (cols.length === 0) return null;
-  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?)\b/i;
+  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand)\b/i;
+
+  // Score each collection; higher score = more specific.
+  const scored = [];
   for (const c of cols) {
     const t = String(c.title || '').trim();
-    if (!t || promos.test(t)) continue;
-    // Heuristic: collection title must contain the category word or a model
-    // number to be treated as a "family" for our catalog taxonomy.
-    if (category && new RegExp('\\b' + category.replace(/\s+/g, '\\s*') + '\\b', 'i').test(t)) return t;
-    if (/iPhone\s*\d{1,2}|iPad\s*(Pro|Air|mini)|MacBook\s*(Air|Pro)|Apple\s*Watch|AirPods/i.test(t)) return t;
+    if (!t) continue;
+    if (promos.test(t)) continue;
+    let score = 0;
+    // Specific model signals
+    if (/iPhone\s*\d{1,2}\s*(Pro\s*Max|Pro|Plus|Mini|Air|e)\b/i.test(t)) score += 100;
+    if (/iPhone\s*Air|iPhone\s*SE/i.test(t)) score += 100;
+    if (/iPad\s*(Pro|Air|Mini)/i.test(t)) score += 80;
+    if (/MacBook\s*(Air|Pro)|Mac\s*Studio|Mac\s*mini|iMac/i.test(t)) score += 80;
+    if (/Apple\s*Watch\s*(Series\s*\d+|Ultra\s*\d*|SE\s*\d*)/i.test(t)) score += 80;
+    if (/AirPods\s*(Pro\s*\d*|Max|4|3|2)/i.test(t)) score += 80;
+    // Series-level
+    if (/Series\b/i.test(t)) score += 40;
+    // Generic category
+    if (category && new RegExp('^\\s*' + category.replace(/\s+/g, '\\s*') + '\\s*$', 'i').test(t)) score += 5;
+    // Penalty: only partial category match (just contains the word)
+    if (score === 0 && category && new RegExp('\\b' + category.replace(/\s+/g, '\\s*') + '\\b', 'i').test(t)) score += 10;
+    // Length tiebreaker — longer, more specific titles win within same tier
+    score += t.length * 0.1;
+    scored.push({ title: t, score });
   }
-  return null;
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].title;
 }
 
 // Extract an option value (like Color / Storage) from Shopify variant metadata
