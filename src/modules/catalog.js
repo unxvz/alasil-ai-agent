@@ -107,7 +107,11 @@ function _enrichProduct(p) {
   const title = p.title || '';
   const norm = normalizeTitle(title);
   const tagsText = Array.isArray(p.tags) ? p.tags.join(' ') : '';
-  const category = detectCategoryFromAdmin(p) || detectCategory(norm, p.productType, p.tags);
+  // Title-based detection runs FIRST — it handles Apple product lines cleanly
+  // (AirPods, iPhone, iPad, Mac all start their titles with the family name).
+  // Shopify's standardized `category` taxonomy is a fallback; merchants often
+  // mis-tag AirPods as "Headphones", and title beats that every time.
+  const category = detectCategory(norm, p.productType, p.tags) || detectCategoryFromAdmin(p);
   const family = detectFamilyFromCollections(p, category) || detectFamily(norm, category);
   const variant = detectVariant(norm, category);
   const chip = detectChip(norm) || detectChip(tagsText) || detectChip(String(p.productType || ''));

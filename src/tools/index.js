@@ -114,17 +114,13 @@ export const tools = [
     function: {
       name: 'findProduct',
       description:
-        "PRIMARY SHOPPING TOOL. Walks the merchant-curated catalog in the exact order a customer thinks: CATEGORY -> COLLECTION -> PRODUCT. Given the customer's raw phrase (plus any known attrs), it (1) infers the category, (2) matches Shopify collections the merchant actually created for that category, (3) scores products inside the best-matching collection(s) by tag overlap with the phrase + any attrs you pass, and (4) returns top candidates with differentiating specs for customer confirmation. Call this first for any shopping/stock question before other tools. If it returns exactly one high-confidence match, confirm with the customer; if several, show top 3 differences.",
+        "PRIMARY SHOPPING TOOL — USE THIS FIRST FOR EVERY SHOPPING OR STOCK QUESTION. Do NOT use browseMenu, searchProducts, filterCatalog, or getProductByTitle for shopping unless findProduct returns no candidates. This tool mirrors Revibe/Athena-style product discovery: it parses the customer's phrase, infers category, matches the merchant's real Shopify collections, filters by tags, and returns top candidates with a confidence flag. Pass customer_message AS-IS — DO NOT set category; the tool infers it correctly and setting it wrong (e.g. 'Headphones' for an AirPods query) will return zero results. Storage/color/region/chip/max_price are optional narrowing filters.",
       parameters: {
         type: 'object',
         properties: {
           customer_message: {
             type: 'string',
             description: "The customer's shopping phrase — pass it RAW. Example: 'iphone 17 pro max 256 silver middle east'.",
-          },
-          category: {
-            type: 'string',
-            description: 'Optional — if you already know the category, set it. Otherwise leave empty and the tool will infer.',
           },
           storage_gb: { type: 'number' },
           color: { type: 'string' },
@@ -666,15 +662,17 @@ async function tool_getBySKU({ sku }) {
 //                             →  products in that collection
 //                             →  narrow by any attrs given
 async function tool_findProduct(args = {}) {
-  const { customer_message, category: hintCategory, storage_gb, color, region, chip, max_price_aed, limit = 4 } = args;
+  const { customer_message, storage_gb, color, region, chip, max_price_aed, limit = 4 } = args;
   if (!customer_message) return { error: 'customer_message is required' };
 
   const msg = String(customer_message).toLowerCase();
   const tokens = msg.replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((t) => t.length >= 2);
   const tokenSet = new Set(tokens);
 
-  // ── STEP 1: infer category from message keywords (or use hint) ──
-  const category = hintCategory || inferCategoryFromMessage(msg);
+  // ── STEP 1: infer category from message keywords ──
+  // We always infer — caller no longer passes category, because the LLM
+  // sometimes guessed wrong (e.g. 'Headphones' for an AirPods query).
+  const category = inferCategoryFromMessage(msg);
   if (!category) {
     return {
       step: 'category_unknown',
@@ -693,16 +691,30 @@ async function tool_findProduct(args = {}) {
   }
 
   // ── STEP 2: score collections (merchant-curated) against message tokens ──
-  const collectionScore = new Map(); // title -> { score, products: Set<id> }
-  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand|previous\s*models?|older\s*models?)\b/i;
+  // Customer phrase like "iphone 17 normal" means the STANDARD variant —
+  // if a collection has a variant word the customer didn't use (Pro, Pro Max,
+  // Plus, Mini, Air, e), we penalise it. This prevents "iPhone 17 Pro" from
+  // winning over "iPhone 17" just because it contains "iphone 17".
+  const collectionScore = new Map();
+  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand|previous\s*models?|older\s*models?|accessor(y|ies))\b/i;
+
+  // Variant words the customer MUST have used for us to pick a variant-ed collection.
+  const VARIANT_WORDS = ['pro', 'max', 'plus', 'mini', 'air', 'ultra', 'e', 'se'];
+  const customerMentionedVariant = new Set();
+  for (const tok of tokens) if (VARIANT_WORDS.includes(tok)) customerMentionedVariant.add(tok);
+  const wantsStandard = /\b(normal|standard|base|regular)\b/.test(msg);
+
   for (const p of pool) {
     for (const c of p.collections || []) {
       const t = String(c.title || '').trim();
       if (!t || promos.test(t)) continue;
-      let s = 0;
       const tl = t.toLowerCase();
       const tTokens = tl.replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((x) => x.length >= 2);
+
+      let s = 0;
+      // Token overlap — each matching word scores
       for (const tok of tTokens) if (tokenSet.has(tok)) s += 5;
+
       // Bonus for model-specific collection titles
       if (/iphone\s*\d{1,2}\s*(pro\s*max|pro|plus|mini|air|e)/.test(tl)) s += 3;
       if (/iphone\s*(air|se)\b/.test(tl)) s += 3;
@@ -710,6 +722,20 @@ async function tool_findProduct(args = {}) {
       if (/macbook\s*(air|pro)|mac\s*(studio|mini)|imac/.test(tl)) s += 3;
       if (/apple\s*watch\s*(series|ultra|se)/.test(tl)) s += 3;
       if (/airpods\s*(pro|max|\d)/.test(tl)) s += 3;
+
+      // PENALTY: collection has a variant word the customer did NOT use
+      // ("iPhone 17 Pro" vs customer saying "iphone 17 normal").
+      for (const vw of VARIANT_WORDS) {
+        const hasInTitle = new RegExp('\\b' + vw + '\\b').test(tl);
+        if (hasInTitle && !customerMentionedVariant.has(vw)) s -= 8;
+      }
+      // BONUS: customer said "normal/standard" and this collection is the bare model
+      if (wantsStandard && /^iphone\s*\d{1,2}\s*$/.test(tl.trim())) s += 20;
+      // BONUS: collection title contains a word the customer's phrase does NOT
+      // indicate (for distinguishing against the bare model). Handled above
+      // as penalty; here we also give a positive boost to exactly-matched titles.
+      if (tl === msg.trim() || tTokens.every((tt) => tokenSet.has(tt))) s += 6;
+
       if (s > 0) {
         if (!collectionScore.has(t)) collectionScore.set(t, { score: 0, products: new Set() });
         const entry = collectionScore.get(t);
@@ -734,6 +760,22 @@ async function tool_findProduct(args = {}) {
   } else {
     // No collection match — fall back to the whole category.
     candidates = pool;
+  }
+
+  // Strong-token filter so merged collections like "Mac Studio & Mac mini"
+  // don't return Mac mini when the customer asked for "mac studio". Require
+  // every "strong" word (≥3 chars, not a common filler) in the customer's
+  // phrase to appear in the product title.
+  const STRONG_TOKEN_SKIP = new Set(['the', 'and', 'for', 'with', 'from', 'into', 'need', 'want', 'have', 'i need', 'i want', 'please', 'normal', 'standard', 'regular']);
+  const strongTokens = tokens.filter((t) => t.length >= 3 && !STRONG_TOKEN_SKIP.has(t));
+  if (candidates.length > 0 && strongTokens.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const t = String(p.title || '').toLowerCase();
+      // Require at least 60% of strong tokens to appear in title
+      const hits = strongTokens.filter((tok) => t.includes(tok)).length;
+      return hits >= Math.ceil(strongTokens.length * 0.6);
+    });
+    if (filtered.length > 0) candidates = filtered;
   }
 
   // ── STEP 4: narrow by tags + provided attrs ──
@@ -880,6 +922,21 @@ async function tool_browseMenu(args = {}) {
         const k = String(p.model_key || '').toLowerCase();
         return tokens.every((t) => k.includes(t));
       });
+    }
+  }
+  // Guard against merged-collection leakage: alAsil has model_keys like
+  // "Mac Studio & Mac mini (M2)" — a customer saying "mac studio" should
+  // NOT get Mac minis back. So require the product TITLE to contain every
+  // token of the query.
+  if (matched.length > 0) {
+    const qTokens = mk.replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((t) => t.length >= 2);
+    if (qTokens.length > 0) {
+      const titleFiltered = matched.filter((p) => {
+        const t = String(p.title || '').toLowerCase();
+        return qTokens.every((tok) => t.includes(tok));
+      });
+      // Only apply if it narrows down (don't drop to zero)
+      if (titleFiltered.length > 0) matched = titleFiltered;
     }
   }
   if (matched.length === 0) {
