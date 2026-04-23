@@ -16,9 +16,24 @@ export async function getCatalog({ refresh = false } = {}) {
     try {
       const raw = await fetchAllProducts();
       const enriched = raw.map(_enrichProduct);
+      const wasFirstLoad = _cache === null;
+      const prevSkuCount = _cache?.length || 0;
       _cache = enriched;
       _loadedAt = Date.now();
       logger.info({ count: enriched.length }, 'Shopify catalog loaded');
+      // Auto-rebuild the taxonomy file whenever the catalog refreshes AND the
+      // set of products changed. Runs async — we don't block the caller.
+      if (wasFirstLoad || prevSkuCount !== enriched.length) {
+        Promise.resolve().then(async () => {
+          try {
+            const { buildTaxonomyFromCatalog } = await import('../../scripts/build-taxonomy.js');
+            const res = buildTaxonomyFromCatalog(enriched);
+            logger.info({ path: res.path, lines: res.lines, inStock: res.inStock }, 'taxonomy auto-rebuilt');
+          } catch (err) {
+            logger.warn({ err: String(err?.message || err) }, 'taxonomy auto-rebuild failed');
+          }
+        });
+      }
       return enriched;
     } finally {
       _inflight = null;
@@ -83,7 +98,11 @@ function _enrichProduct(p) {
   // Canonical category_path: "iPhone > iPhone 17 Pro Max > 256GB > Deep Blue"
   // Gives LLM a deterministic breadcrumb so it can map any customer phrase
   // to exactly one product group.
-  const category_path = buildCategoryPath({ category, model_key, storage_gb, color, region });
+  const category_path = buildCategoryPath({
+    category, model_key, family, variant, chip, ram_gb, storage_gb,
+    color, region, connectivity, sim, screen_inch,
+    title: p.title,
+  });
 
   return {
     ...p,
@@ -137,16 +156,118 @@ function buildModelKey({ category, family, variant, chip, screen_inch }) {
   return family;
 }
 
-function buildCategoryPath({ category, model_key, storage_gb, color, region }) {
+// Build a category_path that uniquely identifies the SKU bundle the customer
+// would ask for. We include enough fields per category to avoid duplicates:
+//   iPhone / iPad       → model → storage → color → region → connectivity/sim
+//   Mac                 → model → chip → ram → storage → color
+//   Apple Watch         → family → case size → material → band
+//   AirPods             → family
+//   Accessory/Audio     → brand from title + color (no family concept)
+function buildCategoryPath(p) {
+  const {
+    category, model_key, family, variant, chip, ram_gb, storage_gb,
+    color, region, connectivity, sim, screen_inch, title,
+  } = p;
   const parts = [];
   if (category) parts.push(category);
-  if (model_key && model_key !== category) parts.push(model_key);
-  if (storage_gb) {
-    parts.push(storage_gb >= 1024 ? `${Math.round(storage_gb / 1024)}TB` : `${storage_gb}GB`);
+
+  if (category === 'iPhone') {
+    if (model_key) parts.push(model_key);
+    if (storage_gb) parts.push(fmtBytes(storage_gb));
+    if (color) parts.push(color);
+    if (region) parts.push(region);
+    if (sim && sim !== 'Dual eSIM') parts.push(sim);
+  } else if (category === 'iPad') {
+    if (model_key) parts.push(model_key);
+    if (storage_gb) parts.push(fmtBytes(storage_gb));
+    if (color) parts.push(color);
+    if (connectivity) parts.push(connectivity);
+  } else if (category === 'Mac') {
+    if (model_key) parts.push(model_key);
+    else if (family) parts.push(family);
+    if (chip && !String(model_key || '').includes(chip)) parts.push(chip);
+    if (ram_gb) parts.push(`${ram_gb}GB RAM`);
+    if (storage_gb) parts.push(fmtBytes(storage_gb));
+    if (color) parts.push(color);
+  } else if (category === 'Apple Watch') {
+    if (family) parts.push(family);
+    const caseSize = extractWatchCaseSize(title);
+    if (caseSize) parts.push(caseSize);
+    const material = extractWatchMaterial(title);
+    if (material) parts.push(material);
+    const band = extractBandColor(title);
+    if (band) parts.push(band);
+  } else if (category === 'AirPods') {
+    if (family) parts.push(family);
+    if (color) parts.push(color);
+  } else if (category === 'Accessory' || category === 'Speaker' ||
+             category === 'Headphones' || category === 'Earbuds' ||
+             category === 'Display' || category === 'Dyson' ||
+             category === 'Home Appliance' || category === 'Projector' ||
+             category === 'HomePod' || category === 'Apple TV' ||
+             category === 'Vision Pro') {
+    // These categories don't have a clean family hierarchy — add brand-ish and
+    // title-ish fields so each SKU gets its own unique breadcrumb.
+    if (family) parts.push(family);
+    const brand = extractBrand(title);
+    if (brand && !parts.some((x) => String(x).toLowerCase().includes(brand.toLowerCase()))) {
+      parts.push(brand);
+    }
+    const shortTitle = shortenTitle(title);
+    if (shortTitle && !parts.some((x) => String(x).toLowerCase() === shortTitle.toLowerCase())) {
+      parts.push(shortTitle);
+    }
+    if (storage_gb) parts.push(fmtBytes(storage_gb));
+    if (color) parts.push(color);
+  } else {
+    if (model_key && model_key !== category) parts.push(model_key);
+    if (storage_gb) parts.push(fmtBytes(storage_gb));
+    if (color) parts.push(color);
+    if (region) parts.push(region);
   }
-  if (color) parts.push(color);
-  if (region) parts.push(region);
+
   return parts.join(' > ');
+}
+
+function fmtBytes(gb) {
+  return gb >= 1024 ? `${Math.round(gb / 1024)}TB` : `${gb}GB`;
+}
+
+function extractBrand(title) {
+  const t = String(title || '');
+  const m = t.match(/\b(JBL|Bose|Sony|Harman\s*Kardon|Beats|Shokz|Dyson|Ninja|Cosori|Formovie|Apple|Magic|MagSafe|AirTag|AirPods|Studio\s*Display|Pro\s*Display)\b/i);
+  return m ? m[1] : null;
+}
+
+function extractWatchCaseSize(title) {
+  const m = String(title || '').match(/\b(\d{2})\s*mm\b/);
+  return m ? `${m[1]}mm` : null;
+}
+
+function extractWatchMaterial(title) {
+  const t = String(title || '').toLowerCase();
+  if (/titanium/.test(t)) return 'Titanium';
+  if (/aluminum|aluminium/.test(t)) return 'Aluminum';
+  if (/stainless/.test(t)) return 'Stainless';
+  return null;
+}
+
+function extractBandColor(title) {
+  const t = String(title || '');
+  const m = t.match(/with\s+([A-Z][A-Za-z/ ]+?)\s+(?:Alpine\s*Loop|Trail\s*Loop|Ocean\s*Band|Sport\s*Band|Sport\s*Loop|Solo\s*Loop|Braided\s*Solo\s*Loop|Milanese\s*Loop|Leather|Modern\s*Buckle|Nike\s*Band)/i);
+  return m ? m[1].trim() : null;
+}
+
+function shortenTitle(title) {
+  // Take the first 3-5 meaningful words after stripping brand tokens
+  const t = String(title || '')
+    .replace(/\b(JBL|Bose|Sony|Harman\s*Kardon|Beats|Shokz|Dyson|Ninja|Cosori|Formovie|Apple)\s*/gi, '')
+    .replace(/\([^)]*\)/g, '')
+    .replace(/—|–|-/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = t.split(' ').slice(0, 4);
+  return words.join(' ').slice(0, 48) || null;
 }
 
 // Normalize color names so catalog strings like "Deep Blue Titanium" (inherited
@@ -401,6 +522,51 @@ function detectFamily(t, category) {
     if (/\bsupersonic\b/i.test(t)) return 'Dyson Supersonic';
     if (/\bcorrale\b/i.test(t)) return 'Dyson Corrale';
     if (/\bv1[0-9]\b/i.test(t)) return 'Dyson V-Series';
+    return null;
+  }
+  // Branded audio — extract the product line for each major brand.
+  if (category === 'Headphones' || category === 'Earbuds' || category === 'Speaker') {
+    // Bose lines
+    if (/\bquietcomfort\s*ultra\s*headphones?\b/i.test(t)) return 'Bose QuietComfort Ultra Headphones';
+    if (/\bquietcomfort\s*ultra\s*earbuds?\b/i.test(t)) return 'Bose QuietComfort Ultra Earbuds';
+    if (/\bquietcomfort\s*earbuds?\s*ii\b/i.test(t)) return 'Bose QuietComfort Earbuds II';
+    if (/\bquietcomfort\s*45\b/i.test(t)) return 'Bose QuietComfort 45';
+    if (/\bnoise\s*cancelling\s*headphones?\s*700\b/i.test(t)) return 'Bose Noise Cancelling Headphones 700';
+    if (/\bsoundlink\s*flex\b/i.test(t)) return 'Bose SoundLink Flex';
+    if (/\bsoundlink\s*micro\b/i.test(t)) return 'Bose SoundLink Micro';
+    if (/\bsoundlink\s*max\b/i.test(t)) return 'Bose SoundLink Max';
+    if (/\bsoundbar\s*9\d\d\b/i.test(t)) return 'Bose Soundbar';
+    // Beats lines
+    if (/\bbeats\s*studio\s*pro\b/i.test(t)) return 'Beats Studio Pro';
+    if (/\bbeats\s*studio\s*buds\s*\+\b/i.test(t)) return 'Beats Studio Buds +';
+    if (/\bbeats\s*studio\s*buds\b/i.test(t)) return 'Beats Studio Buds';
+    if (/\bbeats\s*solo\s*4\b/i.test(t)) return 'Beats Solo 4';
+    if (/\bbeats\s*solo\s*3\b/i.test(t)) return 'Beats Solo3';
+    if (/\bbeats\s*solo\s*buds\b/i.test(t)) return 'Beats Solo Buds';
+    if (/\bpowerbeats\s*pro\s*2\b/i.test(t)) return 'Powerbeats Pro 2';
+    if (/\bpowerbeats\s*pro\b/i.test(t)) return 'Powerbeats Pro';
+    if (/\bbeats\s*fit\s*pro\b/i.test(t)) return 'Beats Fit Pro';
+    if (/\bbeats\s*flex\b/i.test(t)) return 'Beats Flex';
+    if (/\bbeats\s*pill\b/i.test(t)) return 'Beats Pill';
+    // JBL speakers
+    if (/\bjbl\s*flip\s*6\b/i.test(t)) return 'JBL Flip 6';
+    if (/\bjbl\s*flip\s*5\b/i.test(t)) return 'JBL Flip 5';
+    if (/\bjbl\s*charge\s*5\b/i.test(t)) return 'JBL Charge 5';
+    if (/\bjbl\s*charge\s*6\b/i.test(t)) return 'JBL Charge 6';
+    if (/\bjbl\s*xtreme\s*[34]\b/i.test(t)) return 'JBL Xtreme';
+    if (/\bjbl\s*pulse\b/i.test(t)) return 'JBL Pulse';
+    if (/\bjbl\s*partybox\b/i.test(t)) return 'JBL PartyBox';
+    if (/\bjbl\s*go\s*\d\b/i.test(t)) return 'JBL Go';
+    if (/\bjbl\s*clip\s*\d\b/i.test(t)) return 'JBL Clip';
+    if (/\bjbl\s*boombox\b/i.test(t)) return 'JBL Boombox';
+    if (/\bjbl\s*tour\s*one\b/i.test(t)) return 'JBL Tour One';
+    if (/\bjbl\s*tour\s*pro\b/i.test(t)) return 'JBL Tour Pro';
+    // Sony / Harman / Shokz catch-all: brand + next word
+    const sm = t.match(/\b(sony|harman\s*kardon|shokz|harman)\s+([A-Za-z0-9-]+)/i);
+    if (sm) return `${sm[1]} ${sm[2]}`;
+    // Fallback: brand alone
+    const brand = t.match(/\b(jbl|bose|sony|harman\s*kardon|beats|shokz)\b/i);
+    if (brand) return brand[1].toUpperCase() === 'JBL' ? 'JBL' : brand[1];
     return null;
   }
   if (category === 'Apple Watch') {
