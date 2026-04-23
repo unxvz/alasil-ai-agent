@@ -68,10 +68,15 @@ export const tools = [
               'Accessory',
             ],
           },
+          model_key: {
+            type: 'string',
+            description:
+              "PREFERRED over family for specific models. Canonical model identifier — isolates ONE sub-model, not the whole line. Examples: 'iPhone 17 Pro Max', 'iPhone 17 Pro', 'iPhone 17' (= standard variant only), 'iPhone Air', 'iPad Pro 13\\\" (M5)', 'iPad Air', 'MacBook Air 13\\\" (M5)', 'MacBook Pro 14\\\" (M5 Pro)', 'Apple Watch Series 11', 'Apple Watch Ultra 3', 'AirPods Pro 3'. Use this for 'what colors / storages / specs does X have' questions.",
+          },
           family: {
             type: 'string',
             description:
-              "Product family exact name. Examples: 'iPhone 17', 'iPhone Air', 'iPhone SE', 'MacBook Pro', 'MacBook Air', 'iPad Pro', 'iPad Air', 'Apple Watch Series 11', 'Apple Watch Ultra', 'AirPods Pro 3'. If unsure or want ALL sub-models, leave blank.",
+              "Family groups ALL variants of a line together (iPhone 17 family includes Pro, Pro Max, Standard). Only use family when the customer really wants the whole line — otherwise prefer model_key.",
           },
           variant: {
             type: 'string',
@@ -147,10 +152,11 @@ export const tools = [
           },
           filters: {
             type: 'object',
-            description: 'Optional filters to scope the question. Same shape as filterCatalog args.',
+            description: "Optional filters to scope the question. PREFER model_key over family — family includes all variants (iPhone 17 Pro + Pro Max + Standard) which gives wrong counts. Example: for iPhone 17 standard colors use {model_key:'iPhone 17'}, for iPhone 17 Pro Max use {model_key:'iPhone 17 Pro Max'}.",
             properties: {
               category: { type: 'string' },
-              family: { type: 'string' },
+              model_key: { type: 'string', description: "Preferred — isolates one exact sub-model." },
+              family: { type: 'string', description: "Legacy grouping across all variants of a line. Avoid unless you want the whole line." },
               variant: { type: 'string' },
               chip: { type: 'string' },
               storage_gb: { type: 'number' },
