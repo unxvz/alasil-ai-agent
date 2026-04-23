@@ -18,6 +18,10 @@ import { UpstreamError } from '../utils/errors.js';
 const API_VERSION = config.SHOPIFY_API_VERSION || '2024-01';
 const TIMEOUT_MS = 15_000;
 
+// Tracks the last seen throttle status so callers can self-pace.
+let _lastThrottleStatus = null;
+let _lastQueryCost = null;
+
 function shopDomain() {
   const h = String(config.SHOPIFY_ADMIN_SHOP_HANDLE || '').trim();
   if (!h) return null;
@@ -50,6 +54,11 @@ async function gql(query, variables) {
       throw new UpstreamError(`Shopify Admin HTTP ${resp.status}`, { body: text.slice(0, 200) });
     }
     const data = await resp.json();
+    // Capture throttle status from EVERY response (Shopify sends it even on
+    // successful calls). This lets the caller pace based on actual bucket
+    // state instead of crashing into the limit and having to retry.
+    _lastThrottleStatus = data.extensions?.cost?.throttleStatus || _lastThrottleStatus;
+    _lastQueryCost = data.extensions?.cost?.actualQueryCost || data.extensions?.cost?.requestedQueryCost || _lastQueryCost;
     if (data.errors) {
       const firstMsg = Array.isArray(data.errors) ? (data.errors[0]?.message || JSON.stringify(data.errors[0])) : String(data.errors);
       const isThrottle = /throttl/i.test(String(firstMsg)) || data.errors?.some?.((e) => e?.extensions?.code === 'THROTTLED');
@@ -172,16 +181,16 @@ const ADMIN_PRODUCT_FIELDS = `
   }
 `;
 
-// Paginate through ALL products. GraphQL cost per page is ~158 points.
-// The leaky-bucket refills at 100 points/sec (2000 max). We wait between
-// pages based on the last response's throttleStatus so we never hit
-// THROTTLED, and if we do, we back off and retry.
+// Paginate through ALL products. Shopify Admin GraphQL leaky-bucket:
+// capacity 2000, refill 100/sec. Each bulk page costs ~160. We use smaller
+// pages (15 products ~95 cost) so we can sustain ~1 page/sec without
+// throttling, and we honor the actual throttleStatus from each response
+// before firing the next page.
 export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX || 5000 } = {}) {
   const out = [];
   let cursor = null;
   let hasNext = true;
-  const pageSize = 25;
-  let lastCost = null;
+  const pageSize = 15;
 
   while (hasNext && out.length < max) {
     const q = `
@@ -201,14 +210,13 @@ export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX |
         data = await gql(q, { first: pageSize, after: cursor });
         break;
       } catch (err) {
-        if (err?.throttled && attempt <= 5) {
-          // Wait until the bucket has enough budget, plus safety padding.
-          const available = err.throttleStatus?.currentlyAvailable || 0;
+        if (err?.throttled && attempt <= 6) {
+          const available = err.throttleStatus?.currentlyAvailable ?? 0;
           const restore = err.throttleStatus?.restoreRate || 100;
-          const needed = 200; // bulk request costs ~158, ask for headroom
-          const waitMs = Math.ceil(Math.max(1000, ((needed - available) / restore) * 1000 + 500));
+          const needed = 180;
+          const waitMs = Math.ceil(Math.max(1500, ((needed - available) / restore) * 1000 + 1000));
           logger.warn({ attempt, available, restore, waitMs }, 'admin throttled, waiting');
-          await new Promise((r) => setTimeout(r, Math.min(waitMs, 10_000)));
+          await new Promise((r) => setTimeout(r, Math.min(waitMs, 12_000)));
           continue;
         }
         throw err;
@@ -223,9 +231,15 @@ export async function fetchAllProductsAdmin({ max = config.SHOPIFY_CATALOG_MAX |
     hasNext = Boolean(data.products.pageInfo?.hasNextPage) && edges.length > 0;
     cursor = edges.length ? edges[edges.length - 1].cursor : null;
 
-    // Pace based on last response's throttle status (if surfaced by extensions).
-    // Default 500ms between pages — enough for 50 point regen per pause.
-    if (hasNext) await new Promise((r) => setTimeout(r, 500));
+    // Self-pace based on actual throttle state so we never crash into the limit.
+    if (hasNext) {
+      const avail = _lastThrottleStatus?.currentlyAvailable ?? 500;
+      const restore = _lastThrottleStatus?.restoreRate || 100;
+      const nextCost = _lastQueryCost || 160;
+      const needed = nextCost + 100; // padding
+      const waitMs = avail >= needed ? 200 : Math.ceil(((needed - avail) / restore) * 1000);
+      await new Promise((r) => setTimeout(r, Math.min(Math.max(waitMs, 200), 5000)));
+    }
   }
   return out;
 }
