@@ -785,6 +785,22 @@ async function tool_findProduct(args = {}) {
   if (chip) candidates = candidates.filter((p) => String(p.chip || '').toLowerCase().includes(String(chip).toLowerCase()));
   if (Number.isFinite(max_price_aed)) candidates = candidates.filter((p) => Number.isFinite(p.price_aed) && p.price_aed <= max_price_aed);
 
+  // Additional implicit narrowing from the message itself.
+  // Screen size — for Mac/iPad categories, if the message has 13/14/15/16/24
+  // treat it as a screen-size hint.
+  const sizeHint = extractSizeHintFromMessage(msg, category);
+  if (sizeHint) {
+    const filtered = candidates.filter((p) => Math.floor(Number(p.screen_inch || 0)) === sizeHint);
+    if (filtered.length > 0) candidates = filtered;
+  }
+
+  // Chip hint — parse full chip names (M5 Pro, M4 Max, M3 Ultra, A18 Pro etc).
+  const chipHint = extractChipHintFromMessage(msg);
+  if (chipHint) {
+    const filtered = candidates.filter((p) => String(p.chip || '').toLowerCase() === chipHint.toLowerCase());
+    if (filtered.length > 0) candidates = filtered;
+  }
+
   // Score remaining by tag overlap with message
   const scored = candidates.map((p) => {
     const tagText = (p.tags || []).join(' ').toLowerCase();
@@ -815,6 +831,44 @@ async function tool_findProduct(args = {}) {
           ? `Exactly one candidate — confirm with customer before treating as final. Show title + price + 1 differentiating spec.`
           : `${top.length} candidates — show 2-3 with differentiating specs (storage/color/region) and ask customer which one.`,
   };
+}
+
+// Parse the size of a MacBook / iPad / iMac from the phrase. Supports
+// "macbook pro 16", "14 inch", "15.3"", "13 inch", "24" imac" etc.
+function extractSizeHintFromMessage(msg, category) {
+  if (category !== 'Mac' && category !== 'iPad' && category !== 'Display') return null;
+  const s = String(msg || '').toLowerCase();
+  // Match a bare number 11-32 (reasonable inch range) that's NOT directly
+  // followed by 'gb/tb' (which would be RAM/storage).
+  const m = s.match(/\b(1[1-9]|2[0-7])(?:\.\d)?\s*(?:inch|in|"|”)?(?!\s*(?:gb|tb|ram|memory|ssd|hdd))/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  // Common Mac/iPad screen sizes
+  if ([11, 13, 14, 15, 16, 24, 27].includes(n)) return n;
+  return null;
+}
+
+// Parse a full Apple chip name out of the message — "M5 Pro", "M4 Max",
+// "M3 Ultra", "A18 Pro", "A19 Pro", etc. Ensures "macbook pro m5 pro"
+// doesn't get stuck on bare "M5" when the customer meant "M5 Pro".
+function extractChipHintFromMessage(msg) {
+  const s = String(msg || '').toLowerCase();
+  // M-series with suffix
+  let m = s.match(/\bm([1-9])\s*(pro\s*max|pro|max|ultra)\b/i);
+  if (m) {
+    const suf = m[2].replace(/\s+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    return `M${m[1]} ${suf}`;
+  }
+  // Bare M-series (no suffix) — but ONLY if no suffix keyword nearby
+  m = s.match(/\bm([1-9])\b/i);
+  if (m) return `M${m[1]}`;
+  // A-series
+  m = s.match(/\ba(1[4-9]|20)\s*(pro|bionic)?\b/i);
+  if (m) {
+    const base = `A${m[1]}`;
+    return m[2] ? `${base} ${m[2].replace(/\b\w/g, (c) => c.toUpperCase())}` : base;
+  }
+  return null;
 }
 
 // Keyword → internal category. Conservative: only fires when a strong anchor
