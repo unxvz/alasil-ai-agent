@@ -8,7 +8,7 @@
 // from the tool outputs.
 
 import { getCatalog, matchesFilter, distinctValues, enrichProduct } from '../modules/catalog.js';
-import { searchProducts as shopifyLiveSearch } from '../modules/shopify.js';
+import { searchProducts as shopifyLiveSearch, verifyStock as shopifyVerifyStock } from '../modules/shopify.js';
 import { addCorrection } from '../modules/corrections.js';
 import { webFetch, WEB_FETCH_KNOWN_TOPICS } from './web-fetch.js';
 import { logger } from '../logger.js';
@@ -228,6 +228,21 @@ export const tools = [
   {
     type: 'function',
     function: {
+      name: 'verifyStock',
+      description:
+        "CRITICAL: before telling a customer that a specific product is out-of-stock or unavailable, call verifyStock to check Shopify LIVE (bypasses the 5-minute cache). Use this any time you are about to say 'not available' / 'out of stock' / 'currently unavailable'. Pass the product handle (from the catalog URL, e.g. 'iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim') OR the SKU. Returns the FRESHEST availableForSale from Shopify, so we don't misreport stock because of a stale cache.",
+      parameters: {
+        type: 'object',
+        properties: {
+          handle: { type: 'string', description: 'Shopify product handle (from the product URL).' },
+          sku: { type: 'string', description: 'Apple SKU (use when handle is unknown).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'saveCorrection',
       description:
         "Save a permanent correction AFTER you have verified (via another tool call or the knowledge base) that your previous reply was factually wrong and the customer is right. The correction is stored and injected into EVERY future agent system prompt, so the next time any customer asks the same question, the fix is automatic. Only call this when the customer's disagreement has been verified. Do NOT call it if the bot was actually correct.",
@@ -288,6 +303,9 @@ export async function executeTool(name, args) {
         break;
       case 'browseMenu':
         result = await tool_browseMenu(args || {});
+        break;
+      case 'verifyStock':
+        result = await tool_verifyStock(args || {});
         break;
       default:
         return { error: `Unknown tool: ${name}` };
@@ -758,6 +776,33 @@ async function tool_browseMenu(args = {}) {
     products: scoped.slice(0, 10).map(briefProduct),
     count: scoped.length,
   };
+}
+
+// Live stock verification — bypasses the 5-minute catalog cache and hits the
+// Shopify Storefront API for the freshest availableForSale. Use right before
+// telling a customer something is out of stock.
+async function tool_verifyStock({ handle, sku }) {
+  let useHandle = handle;
+  // If only SKU given, find the handle from the catalog first.
+  if (!useHandle && sku) {
+    const catalog = await getCatalog();
+    const hit = catalog.find((p) => String(p.sku || '').toLowerCase() === String(sku).toLowerCase());
+    if (hit) useHandle = hit.handle;
+  }
+  if (!useHandle) return { error: 'handle or sku required (and SKU not found in catalog)' };
+
+  try {
+    const fresh = await shopifyVerifyStock(useHandle);
+    if (!fresh) return { error: 'product not found on Shopify', handle: useHandle };
+    const enriched = enrichProduct(fresh);
+    return {
+      checked_at: new Date().toISOString(),
+      in_stock_live: Boolean(enriched.in_stock),
+      product: briefProduct(enriched),
+    };
+  } catch (err) {
+    return { error: String(err?.message || err), handle: useHandle };
+  }
 }
 
 async function tool_saveCorrection({ original_customer_message, wrong_reply, correct_reply, note }) {
