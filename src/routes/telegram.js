@@ -160,6 +160,29 @@ function agentLanguage(raw, text) {
   return 'en';
 }
 
+// Pull category / model_key / family / variant out of any tool call arguments
+// the LLM made this turn. This is how we keep the faceted focus stable across
+// turns even when the tool returned only options (browseMenu narrowing),
+// not products.
+function extractFocusFromToolCalls(toolCalls) {
+  const focus = {};
+  for (const tc of toolCalls || []) {
+    const a = tc.args || {};
+    if (a.category) focus.category = a.category;
+    if (a.model_key) focus.model_key = a.model_key;
+    if (a.family) focus.family = a.family;
+    if (a.variant) focus.variant = a.variant;
+    // Tools that take a `filters` object (getAvailableOptions)
+    if (a.filters && typeof a.filters === 'object') {
+      if (a.filters.category) focus.category = a.filters.category;
+      if (a.filters.model_key) focus.model_key = a.filters.model_key;
+      if (a.filters.family) focus.family = a.filters.family;
+      if (a.filters.variant) focus.variant = a.filters.variant;
+    }
+  }
+  return Object.keys(focus).length > 0 ? focus : null;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Handler — LLM tool-calling agent
 // ────────────────────────────────────────────────────────────────────────────
@@ -184,6 +207,30 @@ async function handleAgent(msg, session, sessionId, userText) {
   if (Array.isArray(agentResult.products) && agentResult.products.length > 0) {
     session.last_products = agentResult.products.slice(0, 4);
   }
+
+  // Track the "focus hint" — the category / model_key / family the LLM
+  // narrowed to via browseMenu / filterCatalog / searchProducts. This keeps
+  // the anchor stable across turns even when the tool returned only options
+  // (not products), so short follow-ups ("which colors?", "256?") stay
+  // locked on the same device the customer was narrowing.
+  const focusFromTools = extractFocusFromToolCalls(agentResult.toolCalls || []);
+  if (focusFromTools) {
+    session.focus = { ...(session.focus || {}), ...focusFromTools, ts: Date.now() };
+  }
+  // If an explicit product list was returned, override focus from those too
+  // (strongest signal).
+  if (Array.isArray(agentResult.products) && agentResult.products.length > 0) {
+    const p0 = agentResult.products[0];
+    session.focus = {
+      ...(session.focus || {}),
+      category: p0.category || session.focus?.category,
+      model_key: p0.model_key || session.focus?.model_key,
+      family: p0.family || session.focus?.family,
+      variant: p0.variant || session.focus?.variant,
+      ts: Date.now(),
+    };
+  }
+
   // Agent path doesn't use structured options flow — clear stale state.
   session.last_question = null;
   session.last_options = [];
