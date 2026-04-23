@@ -682,11 +682,40 @@ async function tool_browseMenu(args = {}) {
     };
   }
 
-  // Filter by model_key
-  scoped = scoped.filter((p) => p.model_key === model_key);
-  if (scoped.length === 0) {
-    return { level: 'empty', category, model_key, options: [], hint: `No in-stock items for ${model_key}.` };
+  // Filter by model_key — try exact, then fuzzy (substring, case-insensitive)
+  // because the LLM often passes "MacBook Air" when our actual model_key is
+  // "MacBook Air 13\" (M5)". Without the fuzzy fallback we'd wrongly report
+  // no stock.
+  const mk = String(model_key).toLowerCase().trim();
+  let matched = scoped.filter((p) => String(p.model_key || '').toLowerCase() === mk);
+  if (matched.length === 0) {
+    // Substring / starts-with fallback
+    matched = scoped.filter((p) => String(p.model_key || '').toLowerCase().includes(mk));
   }
+  if (matched.length === 0) {
+    // Split tokens and require all tokens to appear in model_key
+    const tokens = mk.split(/\s+/).filter((t) => t.length >= 2);
+    if (tokens.length > 0) {
+      matched = scoped.filter((p) => {
+        const k = String(p.model_key || '').toLowerCase();
+        return tokens.every((t) => k.includes(t));
+      });
+    }
+  }
+  if (matched.length === 0) {
+    // Return the list of actual model_keys under this category so the bot can
+    // tell the customer what we DO have, instead of "out of stock".
+    const available = [...new Set(scoped.map((p) => p.model_key).filter(Boolean))].slice(0, 12);
+    return {
+      level: 'empty',
+      category,
+      model_key,
+      options: [],
+      hint: `No exact match for "${model_key}". Available ${category} models we actually stock: ${available.join(', ')}. Pick one of those model_keys and retry.`,
+      available_model_keys: available,
+    };
+  }
+  scoped = matched;
 
   // No storage yet → return storages (only if they vary)
   if (!storage_gb) {
