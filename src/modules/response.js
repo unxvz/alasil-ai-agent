@@ -272,6 +272,11 @@ function greetingReply(language) {
   return "Hey! 👋 Great to hear from you — I'm the alAsil AI agent, here to help you find the perfect Apple product. What are you looking for today? (iPhone / iPad / Mac / AirPods / Apple Watch)";
 }
 
+function greetingAckReply(language) {
+  if (language === 'fa') return 'سلام دوباره 👋 — چه کمکی می‌تونم بکنم؟';
+  return "Hey 👋 — what can I help you with?";
+}
+
 function thanksReply(language) {
   if (language === 'fa') return 'قابلی نداشت! چیز دیگه‌ای لازم داری؟';
   return "You're welcome! Anything else I can help with?";
@@ -317,8 +322,10 @@ export async function buildResponse({ intent, profile, language, userMessage, hi
   }
 
   const trimmed = String(userMessage).trim();
+  const priorAssistantTurn = Array.isArray(history) && history.some((h) => h.role === 'assistant');
   if (GREETING_PATTERN.test(trimmed)) {
-    return { type: 'answer', text: greetingReply(language), products: [] };
+    const text = priorAssistantTurn ? greetingAckReply(language) : greetingReply(language);
+    return { type: 'answer', text, products: [] };
   }
   if (THANKS_PATTERN.test(trimmed)) {
     return { type: 'answer', text: thanksReply(language), products: [] };
