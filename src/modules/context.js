@@ -64,7 +64,23 @@ function emptyState() {
     asked_fields: [],
     history: [],
     updated_at: Date.now(),
+    // Issue #1 — agent-path short-circuit state
+    pending_action: null,            // 'awaiting_confirmation' | 'awaiting_link_permission' | null
+    pending_product_id: null,        // Shopify GID, e.g. "gid://shopify/Product/123"
+    pending_action_ts: null,         // Date.now() at SET time, for 60s staleness
+    pending_action_category: null,   // category at SET time, for category-change-clear
   };
+}
+
+// Clear all four pending-action fields atomically.
+// Use this on: SC fire (consume), 60s staleness, category change, /reset.
+// Existing sessions in Redis predating Issue #1 will have these fields
+// undefined; this still works because the SC checks use truthy checks.
+export function clearPendingAction(state) {
+  state.pending_action = null;
+  state.pending_product_id = null;
+  state.pending_action_ts = null;
+  state.pending_action_category = null;
 }
 
 export async function getSession(sessionId) {
