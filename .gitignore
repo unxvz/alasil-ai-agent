@@ -34,3 +34,4 @@ coverage/
 
 # Local only
 supervisor-boot.log
+supervisor.sh

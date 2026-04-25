@@ -4,7 +4,7 @@
 **Server:** useddevi@khaimah (cPanel, 57.129.140.39)
 **Repo:** https://github.com/unxvz/alasil-ai-agent
 **Telegram bot:** @alasilAi_support_bot
-**Webhook:** https://bot.useddevice.ae/webhook/telegram/alasil-2026-xjk82nq4
+**Webhook:** https://bot.useddevice.ae/webhook/telegram/<TELEGRAM_WEBHOOK_SECRET>
 
 ---
 
@@ -76,19 +76,19 @@ touch tmp/restart.txt
 
 ### Check status:
 ```bash
-curl -s "https://api.telegram.org/bot8619733332:AAEcwEzIjK_D-muF4z-DLiPyhSdBcowgzD8/getWebhookInfo"
+curl -s "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 ```
 
 ### Reset (age down shod va pending messages sabt shodand):
 ```bash
-curl -s "https://api.telegram.org/bot8619733332:AAEcwEzIjK_D-muF4z-DLiPyhSdBcowgzD8/setWebhook" \
+curl -s "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://bot.useddevice.ae/webhook/telegram/alasil-2026-xjk82nq4","drop_pending_updates":true}'
+  -d '{"url":"https://bot.useddevice.ae/webhook/telegram/<TELEGRAM_WEBHOOK_SECRET>","drop_pending_updates":true}'
 ```
 
 ### Disable (age khasti az ngrok bargardan kon):
 ```bash
-curl -s "https://api.telegram.org/bot8619733332:AAEcwEzIjK_D-muF4z-DLiPyhSdBcowgzD8/deleteWebhook"
+curl -s "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/deleteWebhook"
 ```
 
 ---

@@ -145,7 +145,7 @@ The chat-session snapshot held in-flight refactor work that was deliberately lef
 ## 8. Anomalies / Surprises
 
 ### CRITICAL — security
-- **Telegram bot token committed in plain text in [OPERATIONS.md:79,84,91](OPERATIONS.md)**: `bot8619733332:AAEcwEzIjK_D-muF4z-DLiPyhSdBcowgzD8`. This is the live production bot token, in git history. Anyone with repo read access can hijack the bot. **Recommended:** rotate token via @BotFather, scrub `OPERATIONS.md` of the literal value, force-push to remove from history (or at minimum rotate now and accept the historical value is dead).
+- **Telegram bot token committed in plain text in [OPERATIONS.md](OPERATIONS.md) (3 sites) and [supervisor.sh](supervisor.sh) (1 site).** Live production bot token, in git history. Anyone with repo read access can hijack the bot. **Resolution (in progress, see Incidents in REFACTOR_PLAN.md):** rotate via @BotFather, redact literals from current files, untrack `supervisor.sh` (dev-only), accept historical commits as compromised. No history rewriting — rotation is what saves us.
 
 ### Potentially overlapping with Issue #5 — read carefully
 - [src/modules/intent.js](src/modules/intent.js) **already implements regex-based intent classification** with 4 categories (PRODUCT_INQUIRY, COMPARISON, GENERAL_QUESTION, SUPPORT). It's wired into the **legacy pipeline only**. The agent path bypasses it entirely. Issue #5 (per the chat-session plan) wanted intent classification for the agent path to short-circuit greetings/policies before the LLM tool-loop — that gap remains, but the existence of `intent.js` means we should reuse pieces (the regex patterns, the `STRONG_GENERAL_OVERRIDE`) rather than reinventing.
@@ -182,7 +182,7 @@ The chat-session snapshot held in-flight refactor work that was deliberately lef
 
 **No separate staging deployment** is documented. Everything in `OPERATIONS.md` points to production:
 - Single Telegram bot (`@alasilAi_support_bot`), single bot token.
-- Single webhook URL (`/webhook/telegram/alasil-2026-xjk82nq4`).
+- Single webhook URL (`/webhook/telegram/<TELEGRAM_WEBHOOK_SECRET>`).
 - Single domain (`bot.useddevice.ae`).
 - No staging-specific env file or branch.
 
