@@ -28,5 +28,9 @@ cache/
 # Auto-synced (regenerated)
 config/apple_current_lineup.md
 
+# Vitest
+coverage/
+.vitest-cache/
+
 # Local only
 supervisor-boot.log
