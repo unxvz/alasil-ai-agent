@@ -232,7 +232,11 @@ phase_env() {
 
   log "Building staging .env (filter stateful, substitute domain)..."
   local staging_env
-  staging_env=$(_build_staging_env "$prod_env" "$token" "$secret")
+  # Explicit error handling: bash command-substitution does NOT inherit
+  # errexit by default, so a failed pipeline inside _build_staging_env
+  # would otherwise be silently swallowed (see Discovered During Refactor).
+  staging_env=$(_build_staging_env "$prod_env" "$token" "$secret") \
+    || { err "Failed to build staging .env (awk pipeline error)"; return 1; }
 
   log "Writing staging .env (chmod 600)..."
   printf '%s' "$staging_env" \
@@ -247,7 +251,9 @@ _build_staging_env() {
   local generated_at; generated_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
   local prefixes_csv;  prefixes_csv=$(IFS=,; echo "${ENV_FILTER_PREFIXES[*]}")
   local prefixes_colon; prefixes_colon=$(IFS=:; echo "${ENV_FILTER_PREFIXES[*]}")
-  local prod_re; prod_re=$(printf '%s' "$PROD_DOMAIN" | sed 's/[].*+?^${}()|[\\/]/\\&/g')
+  # Escape regex specials in domains so awk gsub treats them literally.
+  local prod_re;  prod_re=$(printf  '%s' "$PROD_DOMAIN"      | sed 's/[].*+?^${}()|[\\/]/\\&/g')
+  local stage_re; stage_re=$(printf '%s' "$STAGING_SUBDOMAIN" | sed 's/[].*+?^${}()|[\\/]/\\&/g')
 
   cat <<HEADER
 # ──────────────────────────────────────────────────────────────────
@@ -269,7 +275,17 @@ _build_staging_env() {
 
 HEADER
 
-  printf '%s\n' "$prod_env" | awk -v prefixes="$prefixes_colon" '
+  # Single awk pass: filter stateful prefixes + substitute domain refs.
+  # Substitution uses placeholder-swap to avoid double-replacing existing
+  # staging refs (e.g. so "staging.bot.useddevice.ae" doesn't become
+  # "staging.staging.bot.useddevice.ae"). awk gsub is portable across
+  # BSD and GNU; the previous sed-based substitution failed on macOS
+  # BSD sed with "parentheses not balanced" — see Discovered During Refactor.
+  printf '%s\n' "$prod_env" | awk \
+      -v prefixes="$prefixes_colon" \
+      -v prod_re="$prod_re" \
+      -v stage_re="$stage_re" \
+      -v stage_subdomain="$STAGING_SUBDOMAIN" '
     BEGIN {
       n = split(prefixes, pfx, ":")
       exact["DATABASE_URL"] = 1
@@ -277,6 +293,7 @@ HEADER
       exact["TELEGRAM_BOT_TOKEN"] = 1
       exact["TELEGRAM_WEBHOOK_SECRET"] = 1
       exact["NODE_ENV"] = 1
+      PLH = "ZZSTAGEDOMAINPLHZZ"
     }
     /^[[:space:]]*#/ || /^[[:space:]]*$/ { print; next }
     /^[A-Za-z_][A-Za-z0-9_]*=/ {
@@ -289,11 +306,14 @@ HEADER
       for (i = 1; i <= n; i++) {
         if (index(key, pfx[i]) == 1) { print key "="; next }
       }
+      gsub(stage_re, PLH, val)
+      gsub(prod_re, stage_subdomain, val)
+      gsub(PLH, stage_subdomain, val)
       print key "=" val
       next
     }
     { print }
-  ' | sed -E "s|(^|[^A-Za-z0-9.-])${prod_re}|\\1${STAGING_SUBDOMAIN}|g"
+  '
 
   printf '\n# === Staging overrides (managed by provision-staging.sh) ===\n'
   printf 'NODE_ENV=production\n'
