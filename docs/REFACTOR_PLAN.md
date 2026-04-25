@@ -1597,6 +1597,77 @@ and webhook secret were briefly visible in the operator's terminal
 (via `head -25` on the half-built `.env`) during diagnosis of this bug.
 Treated as compromised and rotated as part of the env --rotate re-run.
 
+### Issue #1 SC#2 fast-path is structurally inert in production-like LLM behavior
+
+Live testing on staging revealed that the heuristic in `maybeSetPendingAction`
+("1 product AND no URL → SET awaiting_confirmation") rarely fires in practice.
+When users send queries like "iphone 15 pro 256gb", the LLM's natural response
+is to ask a disambiguation question ("which color?") and surface 2-N candidate
+products rather than propose a single SKU for confirmation. Multi-product
+responses don't satisfy the heuristic's preconditions, so pending_action is
+never SET, and the SC#2 fast-path on subsequent "yes" turns never fires.
+
+**Effective behavior in production:**
+- Issue #1's 81 unit/integration tests still pass (logic is correct given
+  the assumed inputs)
+- The SC#2 short-circuit code path is reachable but rarely exercised
+- Customers experience full agent latency on every "yes" turn instead
+  of the optimized fast-path
+
+**Tier A wiring (commit dd120bc) was verified partially:**
+- decideStateReset correctly returns clearPendingAction:true on pivot+catChg
+- applyResetDecision is called with the right decision
+- The `if (resetDecision.clearPendingAction) clearPendingAction(session)`
+  call fires, but is a no-op because pending_action was never SET in the
+  prior turn
+
+**Three follow-up paths (defer to a future issue):**
+1. Tighten the heuristic — only SET when a *specific SKU* (not a family
+   query) was disambiguated to one product. Requires distinguishing
+   "user asked for iPhone 15 Pro Max 256GB Blue" from "user asked for
+   iPhone 15 Pro" loosely.
+2. Adjust the system prompt — instruct the LLM to confirm before sending
+   URLs ("Is this the one you want?"). This makes the heuristic exercise
+   itself naturally. Requires prompt iteration + acceptance criteria.
+3. Combine 1+2.
+4. Deactivate SC#2 in production (set a feature flag) until 1 or 2 lands;
+   keep the code as instrumentation only.
+
+**Evidence sample (from staging sweep on commit 705f07b, worker PID 898558):**
+- Test query: "iphone 15 pro 256gb" → reply: "Two iPhone 15 256GB options
+  are available: 1. iPhone 15 256GB Black — AED 2,689 / 2. iPhone 15 256GB
+  Blue — AED 2,719. Which color do you prefer?"
+- 7 scenarios × 2-3 turns each → 0 SC fires logged across the entire sweep
+- latency_ms range: 70-97 seconds per turn (mostly OpenAI rate-limit backoff)
+
+**Out of scope for Tier A.** Tier A's goal was structural integration. This
+is an effectiveness finding for a future tier.
+
+### Worker stability under sequential POST load (informational)
+
+LSWS Passenger (`lsnode`) pinned all sweep traffic to a single worker
+(PID 898558) across 7 distinct chat_ids and 16+ POSTs over ~1 minute.
+No session bounce observed. This validates the in-memory session strategy
+on staging matching prod under sequential single-source load.
+
+**Caveat:** prod has 2 lsnode workers under multi-IP customer traffic.
+Affinity behavior under that load is not directly verified; the staging
+test was single-source. Bounce risk under prod conditions remains
+theoretical but unobserved.
+
+### OpenAI 429 rate limits hit at 200k TPM under sweep load (informational)
+
+Running 7 concurrent test sessions × 2-3 turns each saturated the
+gpt-4.1-mini TPM limit:
+```
+"429 Rate limit reached for gpt-4.1-mini ... TPM: Limit 200000, Used 189640"
+"hintMs":4000, "waitMs":4500, "msg":"retryable error, backing off"
+```
+The agent's retry/backoff handler worked correctly (no errors propagated
+to users; turns just took 70-97s instead of the usual 2-5s). Capacity
+data point for future load testing or production-traffic capacity
+planning.
+
 ═══════════════════════════════════════════════════════════════════════
 ISSUE STATUS TABLE
 ═══════════════════════════════════════════════════════════════════════
