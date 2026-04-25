@@ -28,8 +28,6 @@ Q3 — Post-snapshot strategy (OPTION B clean reset):           ✅ COMPLETE
    - Step 7: Brought REFACTOR_PLAN.md + CLAUDE.md from snapshot; added this status block
 
 ACTIVE WORK BRANCH:  refactor/main  (tracks origin/refactor/main)
-RECOVERY REFS:       pre-refactor-snapshot (branch + tag pre-refactor-baseline),
-                     backup-before-revert-to-24apr-20h
 
 PHASE 0 — REMAINING STEPS
    ⏳ Install Vitest + create vitest.config.js + tests/ folders
@@ -40,6 +38,19 @@ PHASE 2 — Issues #1–#16 (one branch per issue, no batching)   ⏳ PENDING
 
 DISCOVERED DURING REFACTOR
    (entries added here as new issues surface during execution)
+
+═══════════════════════════════════════════════════════════════════════
+
+## Recovery References
+- Chat-session work: `git checkout pre-refactor-snapshot -- <file>`
+  (branch + tag `pre-refactor-baseline`, both pushed to origin)
+- Backup directory archive: `/tmp/alAsil-backup-archive-20260425-130740.tar.gz` (~30 day TTL)
+- Local-only branch `backup-before-revert-to-24apr-20h` (commit 1075c5a, 2026-04-25 02:31):
+  - Pre-existing safety capsule from before a manual revert on 24 Apr morning
+  - Verified Scenario A: all unique content is older versions superseded by pre-refactor-snapshot
+  - catalog_taxonomy.md content is auto-generated (regenerable via scripts/build-taxonomy.js)
+  - tools/index.js content is pre-enhancement customerStorage (snapshot has the bare-number fallback)
+  - **Action:** leave alone, do not delete, do not push, do not merge. Local safety reference only.
 
 ═══════════════════════════════════════════════════════════════════════
 
