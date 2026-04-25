@@ -354,6 +354,9 @@ export async function executeTool(name, args) {
 // ────────────────────────────────────────────────────────────────────────────
 function briefProduct(p) {
   return {
+    // Issue #1: id (Shopify GID) added so handleAgent can persist
+    // pending_product_id when SC#2 SETs awaiting_confirmation.
+    id: p.id,
     sku: p.sku,
     title: p.title,
     price_aed: Number.isFinite(p.price_aed) ? Number(p.price_aed) : null,

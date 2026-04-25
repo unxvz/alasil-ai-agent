@@ -5,10 +5,16 @@ import { sendMessage, sendChatAction, getMe } from '../channels/telegram.js';
 import { normalize } from '../modules/normalize.js';
 import { detectIntent } from '../modules/intent.js';
 import { extractEntities } from '../modules/entities.js';
-import { getSession, saveSession, resetSession, mergeProfile, appendHistory } from '../modules/context.js';
+import { getSession, saveSession, resetSession, mergeProfile, appendHistory, clearPendingAction } from '../modules/context.js';
 import { buildResponse } from '../modules/response.js';
 import { runAgent } from '../modules/agent.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
+import { isAffirmative } from '../utils/affirmative.js';
+
+// Issue #1: stale-pending-action TTL. Past this many ms since SET, the flag
+// is considered stale (user moved on) and is cleared on the next turn before
+// the SC fast-path runs.
+const PENDING_ACTION_STALE_MS = 60_000;
 
 export const telegramRouter = Router();
 
@@ -186,7 +192,8 @@ function extractFocusFromToolCalls(toolCalls) {
 // ────────────────────────────────────────────────────────────────────────────
 // Handler — LLM tool-calling agent
 // ────────────────────────────────────────────────────────────────────────────
-async function handleAgent(msg, session, sessionId, userText) {
+// Exported for integration testing — see tests/integration/sc-confirmation-flow.test.js
+export async function handleAgent(msg, session, sessionId, userText) {
   const chatId = msg.chat?.id;
   const threadId = msg.message_thread_id;
 
@@ -194,6 +201,26 @@ async function handleAgent(msg, session, sessionId, userText) {
   session.language = agentLanguage(language, userText);
 
   appendHistory(session, 'user', userText);
+
+  // ── Issue #1: SC#2 / SC#3 fast-path (state-flag-driven) ──
+  // 1. Lazy staleness check: clear pending state if older than 60s.
+  if (isPendingActionStale(session)) {
+    clearPendingAction(session);
+  }
+
+  // 2. Fast-path: if a pending_action is set AND user said yes → consume,
+  //    emit URL+closing, return WITHOUT invoking runAgent.
+  if (session.pending_action && isAffirmative(userText)) {
+    const fired = await fireShortCircuit({
+      session,
+      sessionId,
+      chatId,
+      threadId,
+    });
+    if (fired) return;
+    // Fail-open: pending product not in last_products, fall through to runAgent.
+  }
+
   await sendChatAction(chatId, 'typing', { threadId });
 
   const agentResult = await runAgent({
@@ -236,6 +263,19 @@ async function handleAgent(msg, session, sessionId, userText) {
   session.last_options = [];
   session.turns = (session.turns || 0) + 1;
 
+  // ── Issue #1: SET pending_action heuristically ──
+  // If runAgent returned exactly 1 product AND the reply contains no URL,
+  // the bot is asking the customer to confirm. SET awaiting_confirmation so
+  // the next turn's "yes" fires SC#2 instead of paying full LLM cost.
+  maybeSetPendingAction(session, agentResult);
+
+  // ── Issue #1: category-change-clear (naive — Issue #3 will refine) ──
+  // TODO: Issue #3 will refine this with explicit pivot detection.
+  // For now: any category change clears pending state.
+  if (shouldClearForCategoryChange(session)) {
+    clearPendingAction(session);
+  }
+
   appendHistory(session, 'assistant', agentResult.text);
   await saveSession(sessionId, session);
 
@@ -260,6 +300,126 @@ async function handleAgent(msg, session, sessionId, userText) {
     },
     'telegram reply'
   );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Issue #1 — agent-path short-circuit helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+// fireShortCircuit handles SC#2 (post-confirmation) and SC#3 (link-permission,
+// inert in Issue #1 — see "Discovered During Refactor" in REFACTOR_PLAN.md).
+// On success: emits URL+closing line, saves session, sends Telegram message,
+// returns true. The caller MUST NOT proceed to runAgent.
+// On failure (pending_product_id not in last_products — e.g., session was
+// reset between turns): clears the pending state, returns false. The caller
+// then falls through to runAgent so the customer still gets a normal reply.
+async function fireShortCircuit({ session, sessionId, chatId, threadId }) {
+  const t0 = Date.now();
+  const product = (session.last_products || []).find(
+    (p) => p && p.id === session.pending_product_id
+  );
+  if (!product) {
+    logger.warn(
+      { sessionId, pending_product_id: session.pending_product_id },
+      'SC fired but pending_product_id not found in last_products — falling through to runAgent'
+    );
+    clearPendingAction(session);
+    return false;
+  }
+
+  const kind =
+    session.pending_action === 'awaiting_confirmation'
+      ? 'sc2_post_confirmation'
+      : 'sc3_link_permission';
+  const text = buildSCReply(product, session.language);
+
+  // CONSUME-AND-CLEAR — atomic with the reply emission.
+  clearPendingAction(session);
+  appendHistory(session, 'assistant', text);
+  session.turns = (session.turns || 0) + 1;
+  await saveSession(sessionId, session);
+
+  try {
+    await sendMessage(chatId, text, { threadId });
+  } catch (err) {
+    logger.error({ err, chatId, threadId }, 'sendMessage failed (SC path)');
+  }
+
+  logger.info(
+    { sessionId, kind, latency_ms: Date.now() - t0 },
+    'agent short-circuited via state flag'
+  );
+  return true;
+}
+
+// True if pending_action is set AND older than PENDING_ACTION_STALE_MS.
+// Pure predicate — exported for unit testing.
+export function isPendingActionStale(session, now = Date.now()) {
+  if (!session?.pending_action) return false;
+  return now - (session.pending_action_ts ?? 0) > PENDING_ACTION_STALE_MS;
+}
+
+// True if pending_action_category is set AND session.focus.category exists
+// AND they differ. Pure predicate — exported for unit testing.
+// Issue #3 will refine this with explicit pivot detection.
+export function shouldClearForCategoryChange(session) {
+  return Boolean(
+    session?.pending_action_category &&
+      session?.focus?.category &&
+      session.focus.category !== session.pending_action_category
+  );
+}
+
+// SC reply: title + price on the first line, URL on its own line, closing
+// question on its own line. Localized for Arabic if session.language === 'ar'.
+// Exported for unit testing.
+export function buildSCReply(product, language) {
+  const priceStr = Number.isFinite(product.price_aed)
+    ? `AED ${Number(product.price_aed).toLocaleString('en-US')}`
+    : null;
+
+  if (language === 'ar') {
+    const head = priceStr
+      ? `ممتاز — ${product.title} بسعر ${priceStr}.`
+      : `ممتاز — ${product.title}.`;
+    return [head, '', product.url || '', '', 'هل تحتاج شيئًا آخر؟']
+      .filter((line) => line !== '' || product.url) // keep blank lines around URL only when URL exists
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+  const head = priceStr
+    ? `Confirmed — ${product.title} for ${priceStr}.`
+    : `Confirmed — ${product.title}.`;
+  return [head, '', product.url || '', '', 'Anything else?']
+    .filter((line) => line !== '' || product.url)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// SET pending_action heuristically AFTER runAgent returns:
+// - exactly 1 product AND no URL in reply → bot is asking for confirmation
+//   → SET awaiting_confirmation
+// - any other shape → no SET
+// The awaiting_link_permission flag is built but inert — see Issue #1
+// "Discovered During Refactor" entry. Exported for unit testing.
+export function maybeSetPendingAction(session, agentResult) {
+  const products = agentResult?.products || [];
+  if (products.length !== 1) return;
+  const product = products[0];
+  if (!product || !product.id) return;
+
+  const text = String(agentResult?.text || '');
+  if (/https?:\/\/\S+/.test(text)) {
+    // URL already delivered — nothing pending.
+    return;
+  }
+
+  session.pending_action = 'awaiting_confirmation';
+  session.pending_product_id = product.id;
+  session.pending_action_ts = Date.now();
+  session.pending_action_category = product.category || null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
