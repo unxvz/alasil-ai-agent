@@ -47,6 +47,25 @@ const schema = z.object({
   // turns averaging ~15k tokens, max safe concurrency is ~5-6 to stay under TPM.
   AGENT_MAX_CONCURRENT: z.coerce.number().default(5),
   AGENT_MAX_RETRIES: z.coerce.number().default(5),
+
+  // Per-session rate limiting — sliding window cap on messages.
+  // Prevents a single abusive user / runaway loop from spiking OpenAI bills.
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60_000),
+  RATE_LIMIT_MAX_MSGS: z.coerce.number().default(20),
+
+  // Operator alert channel for CRITICAL errors (max-iter hit, send failures).
+  // Can be a Telegram chat ID (group or user) — the bot will post an alert
+  // there. Empty string = alerts logged only.
+  OPERATOR_ALERT_CHAT_ID: z.string().default(''),
+
+  // UTM tagging — every product URL the bot sends to a customer is tagged
+  // with these three UTM params so Shopify analytics can attribute the order
+  // to the AI support assistant. This 3-param scheme matches Shopify's
+  // standard analytics dashboard (Source / Medium / Campaign).
+  // Empty value on any field skips that param.
+  UTM_SOURCE: z.string().default('alasil_ai_bot'),
+  UTM_MEDIUM: z.string().default('chat'),
+  UTM_CAMPAIGN: z.string().default('support_assistant'),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { sendMessage, sendChatAction, getMe } from '../channels/telegram.js';
+import { sendMessage, sendChatAction, getMe, deleteMessages } from '../channels/telegram.js';
 import { normalize } from '../modules/normalize.js';
 import { detectIntent } from '../modules/intent.js';
 import { extractEntities } from '../modules/entities.js';
@@ -9,6 +9,7 @@ import { getSession, saveSession, resetSession, mergeProfile, appendHistory } fr
 import { buildResponse } from '../modules/response.js';
 import { runAgent } from '../modules/agent.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
+import { recordMessage as rateLimitRecord } from '../modules/rate-limit.js';
 
 export const telegramRouter = Router();
 
@@ -236,14 +237,40 @@ async function handleAgent(msg, session, sessionId, userText) {
   session.last_options = [];
   session.turns = (session.turns || 0) + 1;
 
-  appendHistory(session, 'assistant', agentResult.text);
-  await saveSession(sessionId, session);
-
   const outText = (agentResult.text || '').trim();
+
+  // FIX #1 — race condition. Previous order was:
+  //   appendHistory(assistant) → saveSession → sendMessage
+  // If sendMessage threw (rate limit, network), the session recorded a reply
+  // the customer never saw. Next turn, the bot referenced that ghost reply.
+  // New order: sendMessage FIRST; only on success do we persist the turn.
+  // On failure we DO persist the user message (they did send it) but mark
+  // the bot reply as UN-SENT so the next turn can retry or surface the error.
   try {
-    await sendMessage(chatId, outText, { threadId });
+    const sent = await sendMessage(chatId, outText, { threadId });
+    appendHistory(session, 'assistant', agentResult.text);
+    // Track IDs so a later `reset` can clean up the chat.
+    if (!Array.isArray(session.message_ids)) session.message_ids = [];
+    if (sent?.message_id) session.message_ids.push(sent.message_id);
+    if (msg?.message_id) session.message_ids.push(msg.message_id);
+    // Keep the tracked list bounded (Telegram allows batch delete up to 100).
+    if (session.message_ids.length > 200) {
+      session.message_ids = session.message_ids.slice(-200);
+    }
+    await saveSession(sessionId, session);
   } catch (err) {
-    logger.error({ err, chatId, threadId }, 'sendMessage failed');
+    // Send failed. Do NOT append the assistant reply to history — the
+    // customer didn't get it. Persist only the user turn so we don't lose
+    // it, and log loud so the operator sees the failure.
+    logger.error(
+      { err: String(err?.message || err), chatId, threadId, sessionId, reply_preview: outText.slice(0, 200) },
+      'sendMessage failed — bot reply not delivered, NOT persisted to history'
+    );
+    try {
+      await saveSession(sessionId, session);
+    } catch (saveErr) {
+      logger.error({ saveErr, sessionId }, 'saveSession also failed after send failure');
+    }
   }
 
   logger.info(
@@ -297,29 +324,65 @@ async function handleIncoming(msg) {
     return;
   }
 
+  // FIX #10 — per-session sliding-window rate limit. Stops a single abusive
+  // user / runaway loop from hitting OpenAI dozens of times per minute with
+  // different messages (the duplicate-check alone only blocks identical
+  // retries). On overflow we reply once with a polite wait message and skip
+  // the LLM call for this turn.
+  const rl = rateLimitRecord(sessionId);
+  if (!rl.allowed) {
+    const waitSec = Math.ceil((rl.retry_after_ms || 30_000) / 1000);
+    try {
+      await sendMessage(
+        chatId,
+        `You're sending messages a bit too fast. Please wait ${waitSec}s and try again.`,
+        { threadId }
+      );
+    } catch (err) {
+      logger.error({ err, sessionId }, 'rate-limit notice send failed');
+    }
+    return;
+  }
+
   // Commands are processed IMMEDIATELY and flush any pending buffer so we
-  // don't end up replaying stale text right after a /reset.
-  const isCommand = /^\/(start|reset|restart|pause|resume)\b/i.test(userText);
+  // don't end up replaying stale text right after a /reset. Accept both
+  // slash-prefixed forms (/reset, /start, /restart) and bare words
+  // ("reset", "Reset", "RESET", "restart") — Mohammad types "reset"
+  // directly during testing.
+  const isResetCmd =
+    /^\/(start|reset|restart)\b/i.test(userText) ||
+    /^\s*(reset|restart)\s*$/i.test(userText);
+  const isPauseCmd = /^\/pause\b/i.test(userText);
+  const isResumeCmd = /^\/resume\b/i.test(userText);
+  const isCommand = isResetCmd || isPauseCmd || isResumeCmd;
   if (isCommand) {
     const pending = _pending.get(sessionId);
     if (pending) { clearTimeout(pending.timer); _pending.delete(sessionId); }
   }
 
-  if (/^\/(start|reset|restart)\b/i.test(userText)) {
+  if (isResetCmd) {
+    // Silent reset: wipe session history + memory, send NO welcome text.
+    // The bot's first reply in the chat should be its response to the
+    // customer's first REAL message AFTER the reset.
+    //
+    // Also clear the Telegram chat by deleting every message we (the bot)
+    // sent, plus any user-message IDs we tracked. Telegram only allows
+    // deletion of messages <48h old and forbids bots from deleting user
+    // messages outside of groups where they're admin — so this is
+    // best-effort. Anything older than 48h stays visible.
+    try {
+      const s = await getSession(sessionId);
+      const ids = Array.isArray(s.message_ids) ? s.message_ids.slice() : [];
+      // Also include the reset-command message itself so the chat truly
+      // looks empty after.
+      if (msg?.message_id) ids.push(msg.message_id);
+      if (ids.length > 0) {
+        await deleteMessages(chatId, ids);
+      }
+    } catch (err) {
+      logger.warn({ err: String(err?.message || err), sessionId }, 'reset chat-cleanup failed (continuing)');
+    }
     await resetSession(sessionId);
-    const welcome =
-      "Hey — I'm the alAsil AI assistant.\n" +
-      "\n" +
-      "I can help you with Apple products and accessories.\n" +
-      "\n" +
-      "What are you looking for?\n" +
-      "\n" +
-      "- iPhone\n" +
-      "- iPad\n" +
-      "- Mac\n" +
-      "- AirPods\n" +
-      "- Apple Watch";
-    await sendMessage(chatId, welcome, { threadId });
     return;
   }
   if (/^\/pause\b/i.test(userText)) {

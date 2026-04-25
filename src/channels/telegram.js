@@ -35,6 +35,46 @@ export async function sendMessage(chatId, text, { threadId, replyToMessageId, pa
   return tg('sendMessage', config.TELEGRAM_BOT_TOKEN, params);
 }
 
+// Delete a single message the bot previously sent. Only works within 48h
+// in private chats (Telegram limitation). Returns true on success, false
+// on any failure — never throws.
+export async function deleteMessage(chatId, messageId) {
+  if (!hasTelegram()) return false;
+  try {
+    await tg('deleteMessage', config.TELEGRAM_BOT_TOKEN, { chat_id: chatId, message_id: messageId });
+    return true;
+  } catch (err) {
+    logger.debug({ err: String(err?.message || err), chatId, messageId }, 'deleteMessage failed');
+    return false;
+  }
+}
+
+// Bulk delete. Telegram's deleteMessages method accepts up to 100 ids.
+// Silently ignores failures (messages older than 48h, already deleted, etc.)
+export async function deleteMessages(chatId, messageIds) {
+  if (!hasTelegram() || !messageIds?.length) return { deleted: 0, failed: 0 };
+  const ids = messageIds.filter((id) => Number.isFinite(id));
+  let deleted = 0;
+  let failed = 0;
+  // Telegram's batched method:
+  try {
+    await tg('deleteMessages', config.TELEGRAM_BOT_TOKEN, {
+      chat_id: chatId,
+      message_ids: ids.slice(0, 100),
+    });
+    deleted = Math.min(ids.length, 100);
+  } catch (err) {
+    // Fallback — individual deletes.
+    logger.debug({ err: String(err?.message || err) }, 'deleteMessages batch failed, trying per-message');
+    for (const id of ids) {
+      const ok = await deleteMessage(chatId, id);
+      if (ok) deleted++;
+      else failed++;
+    }
+  }
+  return { deleted, failed };
+}
+
 export async function sendChatAction(chatId, action = 'typing', { threadId } = {}) {
   if (!hasTelegram()) return;
   try {

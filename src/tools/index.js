@@ -13,6 +13,7 @@ import { adminEnabled, fetchProductAdmin } from '../modules/shopify-admin.js';
 import { addCorrection } from '../modules/corrections.js';
 import { webFetch, WEB_FETCH_KNOWN_TOPICS } from './web-fetch.js';
 import { logger } from '../logger.js';
+import { withUtm } from '../utils/utm.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tool JSON Schemas (OpenAI function-calling format)
@@ -377,7 +378,11 @@ function briefProduct(p) {
     connectivity: p.connectivity,
     keyboard_layout: p.keyboard_layout,
     category_path: p.category_path,
-    url: p.url,
+    // UTM-tagged URL — every link the LLM hands back to the customer is
+    // already attributed to the AI bot in Shopify analytics. The original
+    // un-tagged URL is preserved on `url_clean` for internal lookups.
+    url: withUtm(p.url),
+    url_clean: p.url,
   };
 }
 
@@ -681,7 +686,17 @@ async function tool_findProduct(args = {}) {
   }
 
   const catalog = await getCatalog();
-  let pool = catalog.filter((p) => p.category === category && p.in_stock !== false);
+  // fullCategoryPool includes out-of-stock so we can still route the query to
+  // the right collection (and then tell the customer it's unavailable).
+  const fullCategoryPool = catalog.filter((p) => p.category === category);
+  let pool = fullCategoryPool.filter((p) => p.in_stock !== false);
+  if (fullCategoryPool.length === 0) {
+    return {
+      step: 'no_products_in_category',
+      category,
+      hint: `We don't carry ${category} products.`,
+    };
+  }
   if (pool.length === 0) {
     return {
       step: 'no_stock_in_category',
@@ -696,7 +711,10 @@ async function tool_findProduct(args = {}) {
   // Plus, Mini, Air, e), we penalise it. This prevents "iPhone 17 Pro" from
   // winning over "iPhone 17" just because it contains "iphone 17".
   const collectionScore = new Map();
-  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand|previous\s*models?|older\s*models?|accessor(y|ies))\b/i;
+  // Note: "Previous Models" / "Older Models" are NOT promos — for legacy-model
+  // queries (iPhone 13/14, Apple Watch Series 9, etc.) these ARE the correct
+  // target collections. Only drop truly promotional / cross-category buckets.
+  const promos = /\b(hot\s*deals?|deals|sale|offers?|bf|black\s*friday|valentines?|new\s*arrivals|bundles?|gift\s*cards?|combos?|bestsellers?|all\s*products?|cases?\s*&?\s*protection|shop\s*by\s*brand|accessor(y|ies))\b/i;
 
   // Variant words the customer MUST have used for us to pick a variant-ed collection.
   const VARIANT_WORDS = ['pro', 'max', 'plus', 'mini', 'air', 'ultra', 'e', 'se'];
@@ -704,7 +722,75 @@ async function tool_findProduct(args = {}) {
   for (const tok of tokens) if (VARIANT_WORDS.includes(tok)) customerMentionedVariant.add(tok);
   const wantsStandard = /\b(normal|standard|base|regular)\b/.test(msg);
 
-  for (const p of pool) {
+  // Extract 1-2 digit model numbers from the customer message (e.g. "iphone 14",
+  // "series 9", "ipad 10", "6th generation"). These are used to penalise
+  // collections that carry a DIFFERENT model number — otherwise "iphone 13"
+  // would route to whichever iPhone collection happens to share the most side
+  // tokens. We catch BOTH bare numbers ("14") AND ordinal numbers ("6th", "7th").
+  const customerNumbers = new Set();
+  for (const m of msg.matchAll(/\b(\d{1,2})\b/g)) {
+    const i = parseInt(m[1], 10);
+    if (i >= 1 && i <= 30) customerNumbers.add(m[1]);
+  }
+  for (const m of msg.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)\b/gi)) {
+    const i = parseInt(m[1], 10);
+    if (i >= 1 && i <= 30) customerNumbers.add(m[1]);
+  }
+  // 4-digit year in the customer message (e.g. "ipad 2022", "macbook 2024").
+  // Used to narrow candidates by year when the merchant stored year metadata.
+  const customerYears = new Set(
+    [...msg.matchAll(/\b(20\d{2})\b/g)].map((m) => m[1]).filter((y) => {
+      const i = parseInt(y, 10);
+      return i >= 2015 && i <= 2030;
+    })
+  );
+  // Storage mentioned in the customer message: "256gb", "1tb", "512 gb",
+  // OR a bare common storage number ("256", "512", "1024") embedded in a
+  // longer phrase. Captured here so we filter candidates by storage even
+  // when the LLM didn't pass storage_gb explicitly and even when the
+  // customer omitted the GB/TB unit.
+  const customerStorage = (() => {
+    const m = msg.match(/\b(\d+(?:\.\d+)?)\s*(gb|tb)\b/i);
+    if (m) {
+      const n = parseFloat(m[1]);
+      return m[2].toLowerCase() === 'tb' ? Math.round(n * 1024) : Math.round(n);
+    }
+    // Fallback — bare numbers that are common Apple storage capacities.
+    // We don't include 64 (rare on current Apple) to avoid false positives.
+    for (const m2 of msg.matchAll(/\b(\d{2,4})\b/g)) {
+      const n = parseInt(m2[1], 10);
+      if ([128, 256, 512, 1024, 2048].includes(n)) return n;
+    }
+    return null;
+  })();
+  // Connectivity mentioned: "wifi + cellular", "wifi cellular", "wi-fi only".
+  // For iPad the merchant uses "Wi-Fi" or "Wi-Fi + Cellular" strings.
+  const customerWantsCellular = /\bcellular\b|\b5g\b|\bsim\b/i.test(msg);
+  const customerWantsWifiOnly =
+    /\b(wifi|wi-?fi)(?:\s*only)?\b/i.test(msg) && !customerWantsCellular;
+  // Color word in the customer message — match any color the catalog uses.
+  const CUSTOMER_COLOR_WORDS = ['black','white','silver','gold','rose','pink','blue','red','green','yellow','purple','orange','teal','titanium','midnight','starlight','space','gray','grey','graphite','sierra','alpine','pacific','deep','natural','desert','cosmic','lavender','mint','sky','champagne','jet'];
+  const customerColorToken = CUSTOMER_COLOR_WORDS.find((c) => new RegExp('\\b' + c + '\\b', 'i').test(msg)) || null;
+  // Region — "Middle East" / "UAE" / "ME" / "TDRA" → ME. "International" /
+  // "With FaceTime" → International. Used to filter when the customer
+  // explicitly picks a region.
+  let customerRegion = null;
+  if (/\b(middle\s*east|me\s*version|uae\s*version|tdra)\b/i.test(msg)) customerRegion = 'Middle East';
+  else if (/\binternational\b|\bwith\s*facetime\b/i.test(msg)) customerRegion = 'International';
+  // SIM type — "Dual eSIM" / "Nano SIM + eSIM" etc.
+  let customerSim = null;
+  if (/\bdual\s*esim\b/i.test(msg)) customerSim = 'Dual eSIM';
+  else if (/\bnano\s*sim\s*\+?\s*esim\b/i.test(msg)) customerSim = 'Nano SIM + eSIM';
+  else if (/\besim\b/i.test(msg) && !customerSim) customerSim = 'eSIM';
+  const customerHasOldIphoneNumber = [...customerNumbers].some((n) => parseInt(n, 10) <= 14);
+  const customerHasOldWatchNumber = /\b(series|ultra)\s*\d\b/.test(msg) && [...customerNumbers].some((n) => parseInt(n, 10) <= 9);
+
+  // Iterate over fullCategoryPool (in-stock AND out-of-stock) so that a query
+  // for a legacy model whose products are all out of stock (iPhone 14,
+  // Apple Watch Series 9, etc.) still routes to its real collection. We track
+  // in-stock and total product IDs separately so downstream code can see
+  // whether the winning collection actually has anything available.
+  for (const p of fullCategoryPool) {
     for (const c of p.collections || []) {
       const t = String(c.title || '').trim();
       if (!t || promos.test(t)) continue;
@@ -729,18 +815,51 @@ async function tool_findProduct(args = {}) {
         const hasInTitle = new RegExp('\\b' + vw + '\\b').test(tl);
         if (hasInTitle && !customerMentionedVariant.has(vw)) s -= 8;
       }
+      // PENALTY: collection has a model NUMBER (1-2 digit) that does not match
+      // any customer-mentioned number. Prevents "apple watch series 9" landing
+      // on "Apple Watch Series 10", or "iphone 13" landing on "iPhone 17".
+      const collectionNumbers = [...tl.matchAll(/\b(\d{1,2})\b/g)]
+        .map((m) => m[1])
+        .filter((n) => {
+          const i = parseInt(n, 10);
+          return i >= 1 && i <= 30;
+        });
+      // FIX #4 — scoring rebalance. Old penalty (-18) was ~3.5x a token
+      // match (+5) which could drown a strong 3-token overlap. New penalty
+      // is proportional to how many tokens the query brings: small queries
+      // get a smaller penalty, big ones get a bigger one. Cap -10 / -14
+      // depending on query length so a single number mismatch can't kill
+      // an otherwise strong overlap.
+      if (collectionNumbers.length > 0 && customerNumbers.size > 0) {
+        const anyMatch = collectionNumbers.some((n) => customerNumbers.has(n));
+        if (!anyMatch) {
+          const queryTokenCount = tokens.length;
+          const penalty = queryTokenCount <= 2 ? -8 : queryTokenCount <= 4 ? -10 : -12;
+          s += penalty;
+        }
+      }
       // BONUS: customer said "normal/standard" and this collection is the bare model
       if (wantsStandard && /^iphone\s*\d{1,2}\s*$/.test(tl.trim())) s += 20;
       // BONUS: collection title contains a word the customer's phrase does NOT
       // indicate (for distinguishing against the bare model). Handled above
       // as penalty; here we also give a positive boost to exactly-matched titles.
       if (tl === msg.trim() || tTokens.every((tt) => tokenSet.has(tt))) s += 6;
+      // BONUS: customer asked for an old model (iPhone ≤14 or Watch Series ≤9)
+      // and this collection is the "Previous Models" / "Older Models" bucket.
+      // That's exactly where legacy products live — route them there.
+      if ((customerHasOldIphoneNumber || customerHasOldWatchNumber) &&
+          /\b(previous|older)\s*models?\b/i.test(tl)) {
+        s += 25;
+      }
 
       if (s > 0) {
-        if (!collectionScore.has(t)) collectionScore.set(t, { score: 0, products: new Set() });
+        if (!collectionScore.has(t)) {
+          collectionScore.set(t, { score: 0, products: new Set(), inStockProducts: new Set() });
+        }
         const entry = collectionScore.get(t);
         entry.score = Math.max(entry.score, s);
         entry.products.add(p.id);
+        if (p.in_stock !== false) entry.inStockProducts.add(p.id);
       }
     }
   }
@@ -753,10 +872,47 @@ async function tool_findProduct(args = {}) {
 
   let candidates;
   let used_collection = null;
+  // Track out-of-stock signal — if the winning collection exists but has zero
+  // in-stock products, the customer asked for something we no longer carry.
+  let requested_collection_out_of_stock = false;
+  let requested_collection_total_products = 0;
+  let alternative_collection = null;
   if (topCollections.length > 0) {
     const best = topCollections[0];
     used_collection = best[0];
-    candidates = pool.filter((p) => best[1].products.has(p.id));
+    requested_collection_total_products = best[1].products.size;
+    if (best[1].inStockProducts.size === 0) {
+      requested_collection_out_of_stock = true;
+      // FIX #8 — progressive alternative selection instead of dumping the
+      // whole category. Prefer the NEXT-BEST scored collection that still
+      // has in-stock products. "iPhone 15 Pro" OOS → try "iPhone 16 Pro"
+      // (runner-up, same variant) rather than every iPhone in stock.
+      const altRunnerUp = topCollections.slice(1).find(
+        ([, info]) => info.inStockProducts.size > 0
+      );
+      if (altRunnerUp) {
+        alternative_collection = altRunnerUp[0];
+        candidates = pool.filter((p) => altRunnerUp[1].inStockProducts.has(p.id));
+      } else {
+        // No close runner-up — fall back to category pool, but cap to the
+        // top 10 most relevant ones (scored by token overlap) so we don't
+        // dump 113 iPhones as "alternatives".
+        const scoredPool = pool
+          .map((p) => {
+            const t = `${String(p.title || '').toLowerCase()} ${(p.tags || []).join(' ').toLowerCase()}`;
+            let h = 0;
+            for (const tok of tokens) if (t.includes(tok)) h++;
+            return { p, h };
+          })
+          .sort((a, b) => b.h - a.h)
+          .slice(0, 10)
+          .map((x) => x.p);
+        candidates = scoredPool;
+      }
+    } else {
+      // Use only in-stock products from the winning collection.
+      candidates = pool.filter((p) => best[1].inStockProducts.has(p.id));
+    }
   } else {
     // No collection match — fall back to the whole category.
     candidates = pool;
@@ -798,7 +954,148 @@ async function tool_findProduct(args = {}) {
   const chipHint = extractChipHintFromMessage(msg);
   if (chipHint) {
     const filtered = candidates.filter((p) => String(p.chip || '').toLowerCase() === chipHint.toLowerCase());
-    if (filtered.length > 0) candidates = filtered;
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      // Customer asked for a specific chip that is out of stock in this collection.
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // Model-number filter. When the customer mentioned a specific model number
+  // (iPhone 14, Series 9, iPad 2022, Gen 6 etc.), the in-stock product titles
+  // must contain that number — either as a bare word ("iPhone 14") OR as
+  // an ordinal ("iPad Mini 7th Generation"). Without the ordinal branch,
+  // \b7\b fails to match "7th" in a title because there's no word boundary
+  // between the digit and "t".
+  if (customerNumbers.size > 0 && candidates.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const t = String(p.title || '').toLowerCase();
+      return [...customerNumbers].some((n) => {
+        const bare = new RegExp('\\b' + n + '\\b');
+        const ordinal = new RegExp('\\b' + n + '(?:st|nd|rd|th)\\b');
+        return bare.test(t) || ordinal.test(t);
+      });
+    });
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // Year filter. Customer said "ipad pro 2022" / "macbook 2024" — products
+  // whose title/year metafield matches that year. Same OOS semantics.
+  if (customerYears.size > 0 && candidates.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const t = String(p.title || '').toLowerCase();
+      // Match 4-digit year in title OR the apple.year / custom.year metafield.
+      const pYear = Number(p.year) || null;
+      return [...customerYears].some((y) => new RegExp('\\b' + y + '\\b').test(t) || pYear === parseInt(y, 10));
+    });
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // Variant-word filter. When the customer said "iphone 15 pro" / "airpods pro"
+  // / "watch ultra", in-stock product titles must contain that variant word.
+  // If zero match we flag OOS for the specific variant.
+  if (customerMentionedVariant.size > 0 && candidates.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const t = String(p.title || '').toLowerCase();
+      for (const vw of customerMentionedVariant) {
+        if (!new RegExp('\\b' + vw + '\\b').test(t)) return false;
+      }
+      return true;
+    });
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // Storage filter from message. Customer said "256gb" / "1tb" — candidates
+  // must match that storage. Same OOS semantics.
+  if (customerStorage && !storage_gb && candidates.length > 0) {
+    const filtered = candidates.filter((p) => p.storage_gb === customerStorage);
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // Connectivity filter. Customer said "wifi + cellular" / "cellular" /
+  // "wifi only" — candidates must match. Falls back gracefully when merchant
+  // didn't set connectivity metadata on the product.
+  if ((customerWantsCellular || customerWantsWifiOnly) && candidates.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const conn = String(p.connectivity || '').toLowerCase();
+      const titleStr = String(p.title || '').toLowerCase();
+      const hasCellular = /cellular|5g|sim/.test(conn) || /\bcellular\b|\b5g\b/.test(titleStr);
+      const isWifiOnly = /wi-?fi/.test(conn) && !hasCellular;
+      if (customerWantsCellular) return hasCellular;
+      if (customerWantsWifiOnly) return isWifiOnly || (!hasCellular && /wi-?fi/.test(conn + ' ' + titleStr));
+      return true;
+    });
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // Color filter from message. Only applies when the user didn't already pass
+  // an explicit color arg (to avoid double-filtering).
+  if (customerColorToken && !color && candidates.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const c = String(p.color || '').toLowerCase();
+      const t = String(p.title || '').toLowerCase();
+      return c.includes(customerColorToken) || t.includes(customerColorToken);
+    });
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // Region filter from message. "Middle East" / "International".
+  if (customerRegion && !region && candidates.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const r = String(p.region || '').toLowerCase();
+      const t = String(p.title || '').toLowerCase();
+      if (customerRegion === 'Middle East') {
+        return r.includes('middle east') || /\bmiddle\s*east\b/.test(t);
+      }
+      if (customerRegion === 'International') {
+        return r.includes('international') || /\binternational\b/.test(t);
+      }
+      return true;
+    });
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
+  }
+
+  // SIM filter from message. "Dual eSIM" / "Nano SIM + eSIM".
+  if (customerSim && candidates.length > 0) {
+    const filtered = candidates.filter((p) => {
+      const s = String(p.sim || '').toLowerCase();
+      const t = String(p.title || '').toLowerCase();
+      return s.includes(customerSim.toLowerCase()) || t.includes(customerSim.toLowerCase());
+    });
+    if (filtered.length > 0) {
+      candidates = filtered;
+    } else {
+      requested_collection_out_of_stock = true;
+    }
   }
 
   // Score remaining by tag overlap with message
@@ -814,22 +1111,125 @@ async function tool_findProduct(args = {}) {
   const cap = Math.min(10, Math.max(1, Number(limit) || 4));
   const top = scored.slice(0, cap).map((x) => briefProduct(x.p));
 
+  // Build aggregated "facets" — the distinct values of each attribute across
+  // the FULL filtered candidate set, so the LLM can ask the customer with
+  // a complete list of in-stock options (not just what fits in the top 4).
+  // Example: for "MacBook" this gives {families: [Air, Neo, Pro]} even though
+  // only 4 candidates are returned.
+  const facetPool = candidates; // post-filter, pre-sort; reflects real in-stock options
+  const uniq = (arr) => [...new Set(arr.filter((v) => v !== null && v !== undefined && v !== ''))];
+
+  // Rank families by recency. For each family compute:
+  //   - latest_year: newest `year` value across in-stock products
+  //   - in_stock_count: how many in-stock products in this family
+  // Then sort by latest_year DESC (then in_stock_count DESC). Split into
+  // `primary_families` (top 4 newest) and `legacy_families` (older ones
+  // that still have in-stock products — we still want to offer them).
+  const familyMeta = new Map();
+  for (const p of facetPool) {
+    if (!p.family) continue;
+    const existing = familyMeta.get(p.family) || { latest_year: 0, in_stock_count: 0 };
+    existing.latest_year = Math.max(existing.latest_year, Number(p.year) || 0);
+    existing.in_stock_count += 1;
+    familyMeta.set(p.family, existing);
+  }
+  const rankedFamilies = [...familyMeta.entries()]
+    .sort((a, b) => (b[1].latest_year - a[1].latest_year) || (b[1].in_stock_count - a[1].in_stock_count))
+    .map(([name, meta]) => ({ name, ...meta }));
+  const primary_families = rankedFamilies.slice(0, 4).map((f) => f.name);
+  const legacy_families = rankedFamilies.slice(4).map((f) => f.name);
+
+  const facets = {
+    // Flat list (back-compat) — all in-stock families, newest first.
+    families: rankedFamilies.map((f) => f.name).slice(0, 12),
+    // Split presentation — primary (newest 4) + legacy (older gens still in stock).
+    primary_families,
+    legacy_families,
+    variants: uniq(facetPool.map((p) => p.variant)).slice(0, 8),
+    chips: uniq(facetPool.map((p) => p.chip)).slice(0, 8),
+    screen_sizes: uniq(
+      facetPool.map((p) => (p.screen_inch ? String(Math.round(p.screen_inch * 10) / 10) + '"' : null))
+    ).slice(0, 6),
+    storages: uniq(facetPool.map((p) => p.storage_gb))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((g) => (g >= 1024 ? g / 1024 + 'TB' : g + 'GB'))
+      .slice(0, 8),
+    rams: uniq(facetPool.map((p) => p.ram_gb))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((g) => g + 'GB')
+      .slice(0, 6),
+    colors: uniq(facetPool.map((p) => p.color)).slice(0, 12),
+    connectivities: uniq(facetPool.map((p) => p.connectivity)).slice(0, 4),
+    regions: uniq(facetPool.map((p) => p.region)).slice(0, 4),
+    sims: uniq(facetPool.map((p) => p.sim)).slice(0, 4),
+  };
+
   // Build a confirmation-friendly response
   const confidence = top.length === 0 ? 'none' : top.length === 1 ? 'high' : 'medium';
+  // If the winning collection is completely out of stock, surface that clearly
+  // so the LLM tells the customer "X is not available, here are alternatives"
+  // instead of silently returning a different product.
+  const oosNotice = requested_collection_out_of_stock
+    ? `The collection "${used_collection}" matched your query but has 0 in-stock products (${requested_collection_total_products} total listed). These alternatives are from the same category.`
+    : null;
+  // Short-circuit directive: when exactly one candidate remains, the bot
+  // should skip further narrowing questions and go straight to confirmation.
+  // We build the full confirmation text here so the LLM just has to repeat
+  // it — fewer opportunities for it to hallucinate a "charging type" or
+  // "color" question that doesn't apply.
+  const singleCandidate = top.length === 1 && !requested_collection_out_of_stock;
+  const confirmation_text = singleCandidate
+    ? `Just to confirm, are you looking for ${top[0].title}?`
+    : null;
+  const skip_to_confirmation = singleCandidate;
+
+  // FIX #5 — multi-candidate safety. Even when count=1 we still expose up to
+  // 2 adjacent alternatives from the same family (different color / storage
+  // if any exist) so a misfiltered candidate (e.g. "mesh" vs "meshki" color
+  // ambiguity) doesn't auto-confirm the wrong SKU. The agent can show these
+  // in case the customer says "hmm not exactly that".
+  const near_alternatives = singleCandidate
+    ? pool
+        .filter((p) => p.family === top[0].family && p.id !== top[0].id && p.in_stock !== false)
+        .slice(0, 2)
+        .map((p) => briefProduct(p))
+    : [];
+  // Build an action hint that is UNAMBIGUOUS about what the LLM should do.
+  const next_action = requested_collection_out_of_stock
+    ? 'say_out_of_stock_and_offer_alternative'
+    : singleCandidate
+      ? 'confirm_the_single_candidate'
+      : top.length === 0
+        ? 'loosen_one_filter_or_ask_clarification'
+        : 'ask_one_narrowing_question_using_facets';
   return {
-    step: 'candidates',
+    step: requested_collection_out_of_stock ? 'requested_out_of_stock' : 'candidates',
     category,
     used_collection,
-    nearby_collections: topCollections.map(([title, info]) => ({ title, products: info.products.size })),
+    alternative_collection,
+    requested_collection_out_of_stock,
+    requested_collection_total_products,
+    nearby_collections: topCollections.map(([title, info]) => ({
+      title,
+      products: info.products.size,
+      in_stock: info.inStockProducts.size,
+    })),
     candidates: top,
+    near_alternatives,
     count_total: scored.length,
-    confidence,
-    confirmation_hint:
-      top.length === 0
+    facets,
+    skip_to_confirmation,
+    confirmation_text,
+    next_action,
+    confidence: requested_collection_out_of_stock ? 'none' : confidence,
+    confirmation_hint: requested_collection_out_of_stock
+      ? `IMPORTANT: The customer asked about "${customer_message}" which maps to "${used_collection}" — this collection has 0 products in stock. Tell the customer clearly that the specific model they requested is not currently available. ${alternative_collection ? `Offer them the closest alternative from "${alternative_collection}" (same family, different year/variant).` : 'Offer one close alternative from the candidates below.'}`
+      : top.length === 0
         ? `No ${category} matches for "${customer_message}" with the given filters. Ask customer to loosen one filter or offer closest alternatives.`
-        : top.length === 1
-          ? `Exactly one candidate — confirm with customer before treating as final. Show title + price + 1 differentiating spec.`
-          : `${top.length} candidates — show 2-3 with differentiating specs (storage/color/region) and ask customer which one.`,
+        : singleCandidate
+          ? `EXACTLY ONE candidate matches. Your reply MUST be the confirmation text verbatim: "${confirmation_text}" — do NOT ask any more narrowing questions (no charging, no color, no chip — the single candidate has already resolved those). Skip everything and confirm.`
+          : `Ask ONE narrowing question and LIST THE OPTIONS from the "facets" object below (families/chips/storages/colors/etc.). These facets reflect ALL in-stock options, not just the ${top.length} candidates shown. Never omit options or make up ones that aren't there.`,
+    ...(oosNotice ? { out_of_stock_notice: oosNotice } : {}),
   };
 }
 

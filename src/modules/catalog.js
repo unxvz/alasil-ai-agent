@@ -117,9 +117,17 @@ function _enrichProduct(p) {
   // merge product lines (e.g. "Mac Studio & Mac mini"). For all other
   // categories, the merchant-curated collection is the best signal.
   const titleFamily = detectFamily(norm, category);
+  const collectionFamily = detectFamilyFromCollections(p, category);
+  // If collectionFamily is just the bare category name (e.g. category="iPad"
+  // returning family="iPad"), it is not actually a family hint — it just
+  // echoes the category. In that case prefer the more specific titleFamily
+  // when we have one. This is how "iPad Pro 2022" products get family="iPad Pro"
+  // even though their only merchant collection is the generic "iPad".
+  const collectionIsBareCategory = collectionFamily && category &&
+    collectionFamily.toLowerCase().replace(/\s+/g, '') === category.toLowerCase().replace(/\s+/g, '');
   const family = category === 'Mac'
-    ? (titleFamily || detectFamilyFromCollections(p, category))
-    : (detectFamilyFromCollections(p, category) || titleFamily);
+    ? (titleFamily || collectionFamily)
+    : (collectionIsBareCategory && titleFamily ? titleFamily : (collectionFamily || titleFamily));
   const variant = detectVariant(norm, category);
   const chip = detectChip(norm) || detectChip(tagsText) || detectChip(String(p.productType || ''));
 
