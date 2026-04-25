@@ -1253,6 +1253,19 @@ DISCOVERED DURING REFACTOR
 include: date, issue ID, severity, file path, brief description,
 proposed handling.)
 
+### Shell injection vector in remote() helper (provisioning scripts)
+
+bin/lib/staging-common.sh's remote() helper passes commands as a single
+shell-interpolated string. Currently safe because all interpolated values
+are hardcoded constants (paths, domain names, etc.). If user-supplied
+values are ever added to a remote() call, this becomes a shell injection
+vector. The phase_deploy function in provision-staging.sh demonstrates
+the safer alternative (heredoc + argv passing).
+
+**Status:** Currently safe; document for future work.
+**Action:** Switch to argv-style if user input is introduced. Consider
+refactoring all remote() callers to argv style as a future cleanup.
+
 ═══════════════════════════════════════════════════════════════════════
 ISSUE STATUS TABLE
 ═══════════════════════════════════════════════════════════════════════
