@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { clearPendingAction } from '../../src/modules/context.js';
 import {
   isPendingActionStale,
-  shouldClearForCategoryChange,
   maybeSetPendingAction,
   buildSCReply,
 } from '../../src/routes/telegram.js';
@@ -112,31 +111,6 @@ describe('isPendingActionStale', () => {
   it('treats null/undefined ts as stale (defensive)', () => {
     const session = makeSessionWithPending({ pending_action_ts: null });
     expect(isPendingActionStale(session, Date.now())).toBe(true);
-  });
-});
-
-describe('shouldClearForCategoryChange', () => {
-  it('returns false when pending_action_category is not set', () => {
-    expect(shouldClearForCategoryChange({ focus: { category: 'iPhone' } })).toBe(false);
-  });
-
-  it('returns false when focus.category is not set', () => {
-    expect(shouldClearForCategoryChange({ pending_action_category: 'iPhone' })).toBe(false);
-  });
-
-  it('returns false when categories match', () => {
-    const s = makeSessionWithPending({ focus: { category: 'iPhone' } });
-    expect(shouldClearForCategoryChange(s)).toBe(false);
-  });
-
-  it('returns true when categories differ', () => {
-    const s = makeSessionWithPending({ focus: { category: 'Mac' } });
-    expect(shouldClearForCategoryChange(s)).toBe(true);
-  });
-
-  it('handles null/missing session safely', () => {
-    expect(shouldClearForCategoryChange(null)).toBe(false);
-    expect(shouldClearForCategoryChange({})).toBe(false);
   });
 });
 

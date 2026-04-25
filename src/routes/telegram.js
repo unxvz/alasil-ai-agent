@@ -280,24 +280,13 @@ export async function handleAgent(msg, session, sessionId, userText) {
   // the next turn's "yes" fires SC#2 instead of paying full LLM cost.
   maybeSetPendingAction(session, agentResult);
 
-  // ── Issue #1: category-change-clear (naive — Issue #3 will refine) ──
-  // TODO: Issue #3 will refine this with explicit pivot detection.
-  // For now: any category change clears pending state.
-  // Ordered BEFORE Issue #3's applyResetDecision so this naive predicate
-  // sees post-runAgent session state, not post-reset state. Step 5 wiring
-  // follow-up will replace this block with: if (resetDecision.clearPendingAction)
-  // clearPendingAction(session) — gated on Issue #3's richer decision matrix.
-  if (shouldClearForCategoryChange(session)) {
-    clearPendingAction(session);
-  }
-
-  // ── Issue #3: state-reset decision based on transition + pivot ──
+  // ── Issue #3 + Tier A wiring: state-reset decision based on transition + pivot ──
   // focusAfter is the post-merge snapshot. decideStateReset compares it to
   // focusBefore (captured at handleAgent entry) and produces an action.
-  // applyResetDecision mutates session.focus and session.last_products
-  // accordingly. clearPendingAction is informational on this branch — at
-  // Tier A merge, the receiving handleAgent calls clearPendingAction(session)
-  // when the boolean is true (Issue #1's helper).
+  // applyResetDecision mutates session.focus and session.last_products.
+  // The clearPendingAction call right after applies Issue #1's pending_action
+  // helper when Issue #3's decision matrix says so — replacing Issue #1's earlier
+  // naive shouldClearForCategoryChange predicate (now removed).
   const focusAfter = session.focus ? { ...session.focus } : null;
   const resetDecision = decideStateReset({ pivotDetected, focusBefore, focusAfter });
   if (
@@ -319,6 +308,9 @@ export async function handleAgent(msg, session, sessionId, userText) {
     );
   }
   applyResetDecision(session, resetDecision);
+  if (resetDecision.clearPendingAction) {
+    clearPendingAction(session);
+  }
 
   appendHistory(session, 'assistant', agentResult.text);
   await saveSession(sessionId, session);
@@ -401,17 +393,6 @@ async function fireShortCircuit({ session, sessionId, chatId, threadId }) {
 export function isPendingActionStale(session, now = Date.now()) {
   if (!session?.pending_action) return false;
   return now - (session.pending_action_ts ?? 0) > PENDING_ACTION_STALE_MS;
-}
-
-// True if pending_action_category is set AND session.focus.category exists
-// AND they differ. Pure predicate — exported for unit testing.
-// Issue #3 will refine this with explicit pivot detection.
-export function shouldClearForCategoryChange(session) {
-  return Boolean(
-    session?.pending_action_category &&
-      session?.focus?.category &&
-      session.focus.category !== session.pending_action_category
-  );
 }
 
 // SC reply: title + price on the first line, URL on its own line, closing
