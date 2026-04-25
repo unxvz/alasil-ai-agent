@@ -1536,6 +1536,67 @@ DISCOVERED DURING REFACTOR
 include: date, issue ID, severity, file path, brief description,
 proposed handling.)
 
+### Shell injection vector in remote() helper (provisioning scripts)
+
+bin/lib/staging-common.sh's remote() helper passes commands as a single
+shell-interpolated string. Currently safe because all interpolated values
+are hardcoded constants (paths, domain names, etc.). If user-supplied
+values are ever added to a remote() call, this becomes a shell injection
+vector. The phase_deploy function in provision-staging.sh demonstrates
+the safer alternative (heredoc + argv passing).
+
+**Status:** Currently safe; document for future work.
+**Action:** Switch to argv-style if user input is introduced. Consider
+refactoring all remote() callers to argv style as a future cleanup.
+
+### Silent failure in env phase merge pipeline (BSD sed + bash local exit-code masking)
+
+The original `phase_env` in `bin/provision-staging.sh` chained
+`printf | awk | sed` to filter prod env and substitute domain references.
+Two compounding bugs caused the entire prod-env merge to silently fail
+when run on macOS:
+
+1. **BSD sed regex incompatibility.** The substitution
+   `sed -E 's|(^|[^A-Za-z0-9.-])bot\.useddevice\.ae|...'` errored on
+   macOS BSD sed with "parentheses not balanced" (BSD sed -E is more
+   pedantic about start-of-line alternations in `(^|[^...])` groups
+   than GNU sed). Pipeline stdout was empty when sed failed.
+
+2. **Bash command-substitution swallows errexit.** The capture
+   `staging_env=$(_build_staging_env ...)` runs in a subshell that does
+   NOT inherit `errexit` by default. The awk-pipe-sed failure inside
+   the function returned non-zero, but the function continued to its
+   trailing `printf` calls (which exit 0), so the function ended with
+   exit 0 and `set -e` saw nothing to abort on. No
+   `|| { err ...; return 1; }` was present on the capture line.
+
+**Symptom:** env phase reported `ok ".env written."` while the staging
+.env contained ONLY the header comment block + the three trailing
+override lines (NODE_ENV, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET).
+The entire prod-env body (filtered + substituted) was missing.
+
+**Fix:** replaced sed substitution with portable awk gsub (placeholder
+swap to avoid double-replacement); added explicit
+`|| { err ...; return 1; }` on the staging_env capture; audited all
+other `=$(...)` captures in the script for similar gaps (none found —
+all critical captures already had explicit handlers).
+
+**Status:** Fixed. Bot would have crashed on first agent call due to
+missing OPENAI_API_KEY rather than silently corrupting prod data, so
+impact was bounded to staging unavailability — no prod blast radius.
+
+**Related broader concern (not addressed in this fix):** bash
+command-substitution doesn't inherit errexit by default. Setting
+`shopt -s inherit_errexit` at the top of the script would prevent this
+class of bug at the framework level. Not done here to keep change
+scope-limited; consider as a future hardening sweep across all bash
+scripts in `bin/`.
+
+**Operational consequence (one-time):** a staging Telegram bot token
+and webhook secret were briefly visible in the operator's terminal
+(via `head -25` on the half-built `.env`) during diagnosis of this bug.
+Treated as compromised and rotated as part of the env --rotate re-run.
+
 ═══════════════════════════════════════════════════════════════════════
 ISSUE STATUS TABLE
 ═══════════════════════════════════════════════════════════════════════
