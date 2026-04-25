@@ -16,6 +16,7 @@ import { tools, executeTool } from '../tools/index.js';
 import { recordAgentTurn } from './agent-metrics.js';
 import { correctionsBlock } from './corrections.js';
 import { createLimiter, limitedRetry } from '../utils/concurrency.js';
+import { validateUrls, extractHandleFromUrl } from '../utils/url-validation.js';
 
 // Single shared limiter for ALL OpenAI calls across the process. Both agent
 // turns and correction-generator calls funnel through this gate so we never
@@ -367,6 +368,7 @@ CRITICAL: When a CARRIED brand query returns 0 products from the tool, DO NOT sa
 - When listing MULTIPLE products: NO URLs. End with "which one interests you?" so customer picks.
 - When exactly 1 product is the answer (buy_confirm or narrowed): include the product URL.
 - When customer explicitly asks "send the link" / "URL" / "where can I see it" → include URL.
+- Never construct URLs from your knowledge of products. Only emit URLs that appear in this turn's tool results or in the LAST PRODUCTS context block. If unsure, omit the URL.
 
 # ESCALATION
 
@@ -414,23 +416,45 @@ function enforceParagraphBreaks(text) {
   });
 }
 
-// Strip product URLs when the reply lists MULTIPLE products.
-// Model-side instructions don't always hold — this is the enforcement.
-// We keep any single trailing URL if the reply only shows one product.
-function stripUrlsForMultiProduct(text, productCount) {
-  if (productCount <= 1) return text;
-  let s = String(text || '');
-  // Remove "View Product https://..." lines entirely.
-  s = s.replace(/^\s*view\s*product[:\s]*https?:\/\/\S+\s*$/gim, '');
-  // Remove inline "... View Product https://..." fragments.
-  s = s.replace(/\s*view\s*product[:\s]*https?:\/\/\S+/gi, '');
-  // Remove standalone URLs that survive on their own line.
-  s = s.replace(/^\s*https?:\/\/\S+\s*$/gm, '');
-  // Remove trailing URL at end of a line ("... - AED 2,459 https://..." → "... - AED 2,459").
-  s = s.replace(/\s+https?:\/\/\S+/g, '');
-  // Collapse blank lines left by the removals.
-  s = s.replace(/\n{3,}/g, '\n\n');
-  return s.trim();
+// Issue #2: derive a product's handle, with backward-compatibility fallback.
+// New code paths populate briefProduct.handle directly; legacy session data
+// in Redis (predating Issue #2) only has the URL field — extract the handle
+// from the URL in that case.
+// Exported for unit testing.
+export function deriveHandle(p) {
+  if (!p) return null;
+  if (p.handle && typeof p.handle === 'string') return p.handle;
+  return extractHandleFromUrl(p.url || '');
+}
+
+// Issue #2: post-process the raw LLM reply through the full pipeline.
+//   stripFormatting → validateUrls → enforceParagraphBreaks
+// Order matters: stripFormatting collapses markdown link syntax to bare
+// URLs (so the validator only sees raw URLs), validateUrls then strips any
+// hallucinated URLs, and enforceParagraphBreaks adds blank-line spacing
+// last (its URL-aware skip already exists for valid URLs).
+//
+// Replaces the old `stripUrlsForMultiProduct` (deleted) which blindly
+// stripped ALL URLs when productCount > 1 and trusted the LLM blindly when
+// productCount === 1. The new pipeline keeps URLs that match a surfaced
+// handle and strips the rest, regardless of count.
+//
+// Exported for integration testing — see tests/integration/url-validation-flow.test.js
+export function postProcessReply({ rawText, surfacedHandles, sessionId }) {
+  const cleaned = stripFormatting(rawText || '');
+  const { text: validated, stripped } = validateUrls(cleaned, surfacedHandles);
+  if (stripped.length > 0) {
+    logger.warn(
+      {
+        sessionId,
+        stripped_count: stripped.length,
+        surfaced_count: surfacedHandles instanceof Set ? surfacedHandles.size : 0,
+        sample_invalid: stripped.join(', ').slice(0, 200),
+      },
+      'URL validation stripped invalid URLs'
+    );
+  }
+  return enforceParagraphBreaks(validated);
 }
 
 // Compute a "current focus" summary from the most recently shown products so
@@ -544,6 +568,18 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
   let collectedProducts = [];
   const toolCalls = [];
 
+  // Issue #2: handles surfaced this turn (via tool results) PLUS prior turns
+  // (via session.last_products) form the allow-list for URL validation.
+  // Per-conversation, not per-turn, so "send me the link" follow-ups don't
+  // get downgraded to "WhatsApp us". surfacedHandles ACCUMULATES across all
+  // tool calls — sidesteps the collectedProducts overwrite bug at line ~628
+  // (Discovered During Refactor: collectedProducts overwrite bug).
+  const surfacedHandles = new Set();
+  for (const p of (lastProducts || [])) {
+    const h = deriveHandle(p);
+    if (h) surfacedHandles.add(h);
+  }
+
   try {
     while (iterations < maxIters) {
       iterations++;
@@ -567,9 +603,11 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
 
       // No tool call → this is the final assistant message.
       if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        const text = enforceParagraphBreaks(
-          stripUrlsForMultiProduct(stripFormatting(msg.content || ''), collectedProducts.length)
-        );
+        const text = postProcessReply({
+          rawText: msg.content || '',
+          surfacedHandles,
+          sessionId,
+        });
         const latency = Date.now() - t0;
         logger.info(
           {
@@ -634,8 +672,21 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
 
         // Keep track of the most recent non-empty product list so we can
         // persist it in session.last_products.
+        // NOTE: this OVERWRITES rather than accumulates — pre-existing bug
+        // tracked in REFACTOR_PLAN.md "Discovered During Refactor". For URL
+        // validation correctness across multi-tool-call turns, we accumulate
+        // handles into `surfacedHandles` separately right below.
         if (Array.isArray(result?.products) && result.products.length > 0) {
           collectedProducts = result.products.slice(0, 4);
+        }
+        // Issue #2: accumulate handles from EVERY tool call's products so
+        // the URL validator's allow-list covers the full turn (not just
+        // the last tool's results).
+        if (Array.isArray(result?.products)) {
+          for (const p of result.products) {
+            const h = deriveHandle(p);
+            if (h) surfacedHandles.add(h);
+          }
         }
 
         messages.push({
@@ -663,12 +714,11 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
         }),
       { retries: MAX_RETRIES, label: 'agent.final' }
     );
-    const text = enforceParagraphBreaks(
-      stripUrlsForMultiProduct(
-        stripFormatting(final.choices?.[0]?.message?.content || ''),
-        collectedProducts.length
-      )
-    );
+    const text = postProcessReply({
+      rawText: final.choices?.[0]?.message?.content || '',
+      surfacedHandles,
+      sessionId,
+    });
     const latency = Date.now() - t0;
     logger.info(
       {

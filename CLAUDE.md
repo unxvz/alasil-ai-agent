@@ -39,7 +39,39 @@ PHASE 1 — Codebase summary                                    ✅ COMPLETE (co
 PHASE 2 — Issues (14 active; #4 and #6 obsolete per Path Y)   ⏳ PENDING
 
 DISCOVERED DURING REFACTOR
-   (entries added here as new issues surface during execution)
+   - 2026-04-25 (Issue #2 plan, Decision 5):
+
+     ### UTM tagging not implemented
+
+     Original Issue #2 spec mentioned preserving UTM-tagged URLs.
+     UTM tagging itself is not implemented on refactor/main (was a
+     snapshot-era feature). Issue #2's validator will strip UTM
+     params before handle comparison so UTM-tagged URLs match
+     correctly if/when UTM is later added. Active UTM tagging is
+     deferred to a future issue dedicated to analytics/marketing
+     tracking.
+
+   - 2026-04-25 (Issue #2 reconnaissance — pre-existing bug on
+     refactor/main, fixed in Issue #2 because the URL validator
+     depends on it):
+
+     ### collectedProducts overwrite bug in agent.js (FIXED in Issue #2)
+
+     `agent.js runAgent` line ~638 currently overwrites
+     `collectedProducts` on each tool call:
+       `collectedProducts = result.products.slice(0, 4);`
+     If tool#1 returns 4 products and tool#2 returns 2 products,
+     the 4 from tool#1 are LOST. This means `agentResult.products`
+     reported to telemetry and stored in `session.last_products`
+     covers only the LAST tool call, not all surfaced products.
+
+     For Issue #2's URL validator, this would cause valid URLs
+     surfaced by tool#1 to fail validation in tool#2's reply.
+     Fixed in Issue #2 by building a parallel `surfacedHandles`
+     Set that accumulates across all tool calls (alongside keeping
+     `collectedProducts` overwrite behavior for backwards
+     compatibility with `session.last_products` consumers — the
+     issue scope is URL validation, not session-data redesign).
 
 ═══════════════════════════════════════════════════════════════════════
 
@@ -292,7 +324,35 @@ ACCEPTANCE:
 ISSUE #2 — URL validation hardening
 Branch: refactor/02-url-validation
 
-PROBLEM:
+PROBLEM (rewritten 2026-04-25 per PHASE 1 / Issue #2 reconnaissance):
+The agent path on refactor/main has NO URL validation. The closest
+existing safety net is `stripUrlsForMultiProduct` in `agent.js`,
+which strips ALL URLs only when product count > 1, and trusts the
+LLM blindly when product count === 1. Three hallucination pathways
+exist:
+
+  (a) LLM mixes handles across multiple tool calls and emits a
+      Frankenstein URL (e.g. takes "iphone-15-pro" from one call
+      and "512gb-deep-blue" from another, fabricates a non-existent
+      URL like /products/iphone-15-pro-512gb-deep-blue).
+  (b) LLM echoes a URL from the LAST PRODUCTS context block even
+      when no tool was called this turn.
+  (c) LLM constructs a URL from the format pattern shown in the
+      system prompt (alasil.ae/products/<handle>) using its own
+      knowledge of product naming.
+
+Add an explicit URL validator that extracts the handle from any URL
+in the LLM reply, compares it against the set of handles surfaced
+this turn (via tool results) PLUS handles from session.last_products
+(prior turns), and either keeps the URL (exact handle match) or
+strips it and appends a WhatsApp fallback. Never fuzzy-substitute.
+
+[Original PROBLEM section retained below for traceability — it
+describes snapshot-era code (`validateUrls` with 60% token-overlap)
+that does not exist on refactor/main. See PHASE 1 reconnaissance
+in commit 1a1b068.]
+
+ORIGINAL PROBLEM (snapshot-era, does not match refactor/main reality):
 Current `validateUrls` does 60% token-overlap substitution. Can
 silently swap "iPhone 15 Pro" for "iPhone 15 Pro Max" (~83% overlap).
 Customer buys wrong product. Real money lost.
@@ -1148,6 +1208,13 @@ STEP 3 — IMPLEMENT
 - Add unit tests (Vitest)
 - Add JSDoc comments where intent isn't obvious
 - Persian comments are OK in code if they help the team
+- **Mid-step deviations from the approved plan must STOP and ASK before
+  implementing, not implement-then-explain.** If you notice tension during
+  implementation (test approach, library choice, file organization,
+  function signature, anything the plan specified) → STOP, frame the
+  tension and your proposed alternative, WAIT for explicit approval, then
+  implement. Unilateral changes erode the contract; small deviations
+  stack up. (Process correction added 2026-04-25 after Issue #2.)
 
 STEP 4 — VERIFY
 - Run `npm test` — show me the output
