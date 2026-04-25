@@ -9,6 +9,8 @@ import { getSession, saveSession, resetSession, mergeProfile, appendHistory } fr
 import { buildResponse } from '../modules/response.js';
 import { runAgent } from '../modules/agent.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
+import { isPivotPhrase } from '../utils/pivot-phrase.js';
+import { decideStateReset, applyResetDecision } from '../utils/state-reset.js';
 
 export const telegramRouter = Router();
 
@@ -194,6 +196,14 @@ async function handleAgent(msg, session, sessionId, userText) {
   session.language = agentLanguage(language, userText);
 
   appendHistory(session, 'user', userText);
+
+  // ── Issue #3: capture focusBefore + detect pivot BEFORE runAgent ──
+  // focusBefore is a shallow snapshot of session.focus at handleAgent entry.
+  // Combined with focusAfter (post-runAgent) and pivotDetected, this drives
+  // the state-reset decision applied after runAgent returns.
+  const focusBefore = session.focus ? { ...session.focus } : null;
+  const pivotDetected = isPivotPhrase(userText);
+
   await sendChatAction(chatId, 'typing', { threadId });
 
   const agentResult = await runAgent({
@@ -235,6 +245,35 @@ async function handleAgent(msg, session, sessionId, userText) {
   session.last_question = null;
   session.last_options = [];
   session.turns = (session.turns || 0) + 1;
+
+  // ── Issue #3: state-reset decision based on transition + pivot ──
+  // focusAfter is the post-merge snapshot. decideStateReset compares it to
+  // focusBefore (captured at handleAgent entry) and produces an action.
+  // applyResetDecision mutates session.focus and session.last_products
+  // accordingly. clearPendingAction is informational on this branch — at
+  // Tier A merge, the receiving handleAgent calls clearPendingAction(session)
+  // when the boolean is true (Issue #1's helper).
+  const focusAfter = session.focus ? { ...session.focus } : null;
+  const resetDecision = decideStateReset({ pivotDetected, focusBefore, focusAfter });
+  if (
+    resetDecision.focusAction !== 'keep' ||
+    resetDecision.clearLastProducts ||
+    resetDecision.clearPendingAction
+  ) {
+    logger.info(
+      {
+        sessionId,
+        pivotDetected,
+        focusAction: resetDecision.focusAction,
+        clearLastProducts: resetDecision.clearLastProducts,
+        clearPendingAction: resetDecision.clearPendingAction,
+        focusBefore,
+        focusAfter,
+      },
+      'state reset applied'
+    );
+  }
+  applyResetDecision(session, resetDecision);
 
   appendHistory(session, 'assistant', agentResult.text);
   await saveSession(sessionId, session);
