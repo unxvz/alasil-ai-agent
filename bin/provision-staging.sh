@@ -163,12 +163,16 @@ if [ ! -d .git ]; then
   git remote add origin "$REPO_URL"
   git fetch -q --depth=50 origin "$BRANCH"
   # reset --hard preserves untracked files like public_html/.htaccess (Passenger config)
-  git checkout -q -B "$BRANCH" "origin/$BRANCH"
+  # -f overwrites cPanel stubs (src/server.js, index.html) with tracked
+  # repo files. public_html/.htaccess is untracked in the repo, not affected.
+  git checkout -qf -B "$BRANCH" "origin/$BRANCH"
   git reset -q --hard "origin/$BRANCH"
 else
   echo "[deploy] Updating existing checkout..."
   git fetch -q origin
-  git checkout -q -B "$BRANCH" "origin/$BRANCH"
+  # -f overwrites cPanel stubs (src/server.js, index.html) with tracked
+  # repo files. public_html/.htaccess is untracked in the repo, not affected.
+  git checkout -qf -B "$BRANCH" "origin/$BRANCH"
   git reset -q --hard "origin/$BRANCH"
 fi
 
