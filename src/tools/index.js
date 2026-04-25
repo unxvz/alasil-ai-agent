@@ -357,6 +357,12 @@ function briefProduct(p) {
     // Issue #1: id (Shopify GID) added so handleAgent can persist
     // pending_product_id when SC#2 SETs awaiting_confirmation.
     id: p.id,
+    // Issue #2: handle (URL slug) added so the URL validator can compare
+    // emitted URL handles against the surfaced-handles set without having
+    // to re-parse the URL field. Backward-compatible with legacy session
+    // data — consumers fall back to extractHandleFromUrl(p.url) when
+    // handle is missing.
+    handle: p.handle,
     sku: p.sku,
     title: p.title,
     price_aed: Number.isFinite(p.price_aed) ? Number(p.price_aed) : null,
