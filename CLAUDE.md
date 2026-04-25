@@ -30,14 +30,78 @@ Q3 — Post-snapshot strategy (OPTION B clean reset):           ✅ COMPLETE
 ACTIVE WORK BRANCH:  refactor/main  (tracks origin/refactor/main)
 
 PHASE 0 — REMAINING STEPS
-   ⏳ Install Vitest + create vitest.config.js + tests/ folders
+   ✅ Vitest infrastructure  (commit 8328023, pushed)
    ⏳ Save docs/MANUAL_TESTS.md (25 manual scenarios S1–S25)
+   ⏳ Resolve Incidents 1 + 2 (token + webhook secret rotation — see Incidents section)
+   ⏳ Staging Environment Setup (separate bot + separate deploy target — see section below)
 
-PHASE 1 — Codebase summary (read-only, no code writes)        ⏳ PENDING
-PHASE 2 — Issues #1–#16 (one branch per issue, no batching)   ⏳ PENDING
+PHASE 1 — Codebase summary                                    ✅ COMPLETE (commit 1a1b068)
+PHASE 2 — Issues (14 active; #4 and #6 obsolete per Path Y)   ⏳ PENDING
 
 DISCOVERED DURING REFACTOR
    (entries added here as new issues surface during execution)
+
+═══════════════════════════════════════════════════════════════════════
+
+## Incidents
+
+### Incident 1 — Telegram bot token leaked (2026-04-25)
+- **Found in PHASE 1 audit**: live production bot token committed in plaintext at `OPERATIONS.md` (3 sites) and `supervisor.sh:13`. A 5th occurrence was added by the PHASE 1 commit itself (`docs/CODEBASE_SUMMARY.md:148` — own-goal while documenting the leak).
+- **Resolution plan**:
+  1. Rotate via @BotFather (Mohammad).
+  2. Deploy new token to production `.env` on cPanel (Mohammad).
+  3. Redact literals from current files (Claude — Track A of pre-Issue-1 commit).
+  4. Untrack `supervisor.sh` (dev-only) (Claude).
+  5. Accept historical commits as compromised. **No git history rewrite** — rotation is what saves us.
+- **Status**: rotation in progress; redactions queued in Track A; no production-affecting actions until Mohammad confirms "TOKEN ROTATED".
+
+### Incident 2 — Telegram webhook secret leaked (2026-04-25)
+- **Found in PHASE 1 audit**: webhook secret in `OPERATIONS.md` (URL line 7 + curl line 86) and `supervisor.sh:14`.
+- **Lower stakes than Incident 1**: junk POST to webhook can't authenticate as a real Telegram update. Still a known-leaked credential — rotated as hygiene.
+- **Resolution plan**: generate via `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"` (Mohammad), update production `.env` (Mohammad), re-register webhook with Telegram (Mohammad), redact literals (Claude — Track A).
+- **Status**: rotation in progress; redactions queued in Track A; no production-affecting actions until Mohammad confirms "WEBHOOK SECRET ROTATED".
+
+### Process note (PHASE 1 own-goal)
+The PHASE 1 `CODEBASE_SUMMARY.md` initially copied the live token verbatim while reporting the leak. The Track A commit redacts that own-goal in the same change set. Going forward, incident reports use placeholders (e.g. `<TELEGRAM_BOT_TOKEN>`) only, never literal credentials.
+
+═══════════════════════════════════════════════════════════════════════
+
+## Staging Environment Setup (pre-Issue-1 task)
+
+**Acceptance criterion before Issue #1's first PR can ship**: a separate staging Telegram bot exists and is reachable from a non-production deploy target.
+
+Steps:
+1. Mohammad creates `@alasilAi_support_staging_bot` via @BotFather. Records staging token in 1Password (or equivalent secret store).
+2. Mohammad chooses a staging deploy target — **decision needed**:
+   - (a) same VPS, different port — cheapest, but shares disk + crash blast radius.
+   - (b) separate VPS / Docker container — cleanest, slightly more setup.
+   - (c) cPanel: a second Node.js app on the same panel — medium effort, isolated process but shared disk.
+3. Staging `.env` reads:
+   - `TELEGRAM_BOT_TOKEN` — staging token (separate from prod).
+   - `TELEGRAM_WEBHOOK_SECRET` — separate.
+   - `SHOPIFY_*` — same as prod (read-only catalog access).
+   - `OPENAI_API_KEY` — same as prod (cost-shared, marginal).
+4. Auto-deploy on push to `refactor/main` — **decision needed**: webhook-driven `git pull` + restart, OR manual deploy script. Mohammad picks based on existing infra.
+5. `/health` endpoint returns staging-specific marker so we can confirm at-a-glance which env we're hitting.
+6. Document staging URL + bot username in `OPERATIONS.md` when complete.
+
+**Soak window**: 48h on staging before any prod deploy of refactored code (per Mohammad's risk tolerance).
+
+**Status**: PENDING — Mohammad fills in (2) and (4) once dev-machine inventory is checked.
+
+═══════════════════════════════════════════════════════════════════════
+
+## Decision Log
+
+Material decisions made during PHASE 0 / PHASE 1, with their rationale, so future-Claude or future-Mohammad can quickly see *why* a path was chosen.
+
+| Date | Decision | Rationale |
+|---|---|---|
+| 2026-04-25 | **OPTION B clean reset** for post-snapshot strategy (Q3) | Snapshot's 12-file refactor work was in-flight and not yet validated. Branching `refactor/main` from current `main` (post fast-forward of PR #1) gives a clean, trustworthy base. Snapshot remains on `pre-refactor-snapshot` branch + `pre-refactor-baseline` tag for reference. |
+| 2026-04-25 | **PATH Y** — refactor/main is truth, no wholesale snapshot port | Confirms OPTION B's intent. Each issue rebuilds the relevant pieces issue-by-issue against current refactor/main. Snapshot used as REFERENCE only (showing how chat-session iteration evolved a feature), never copied wholesale. Direct effect: Issues #4 and #6 marked obsolete (their target artifacts only existed on snapshot). |
+| 2026-04-25 | **OPTION A staging** — separate `@alasilAi_support_staging_bot` + separate deploy target | Lowest blast radius. Avoids feature-flag noise across every refactor branch and avoids deploying refactored code straight to production customers. 48h soak gate before any prod deploy. |
+| 2026-04-25 | **OPTION 13-A** for Issue #13 — extract SYSTEM_PROMPT to `src/prompts/` folder | Knowledge files (`config/*.md`) are already modular at file level; the remaining monolith is the 340-line SYSTEM_PROMPT in `agent.js`. File-based prompts also unblock Issue #12 prompt caching (byte-identical prefix). Cleaner separation of copy ↔ code than option 13-B (functions inside agent.js). |
+| 2026-04-25 | **NO git history rewrite** for token/webhook-secret leaks | Rotation is what saves us; history rewriting on a shared repo with collaborators creates more problems than it solves. Historical commits accepted as compromised post-rotation. |
 
 ═══════════════════════════════════════════════════════════════════════
 
@@ -315,6 +379,22 @@ TIER B — HIGH (architecture / cost) — do these second
 
 ISSUE #4 — Eliminate LLM Extractor (Marhale 2)
 Branch: refactor/04-eliminate-extractor
+Status: ✅ DONE — N/A on refactor/main (Path Y, snapshot strategy)
+
+WHY OBSOLETE (2026-04-25):
+The chat-session snapshot introduced `src/modules/llm-extractor.js`
+(a gpt-4o-mini extractor module). After OPTION B clean reset (Q3
+STEP 4), refactor/main does NOT carry that module — verified by
+PHASE 1 audit: `ls src/modules/` returns no llm-extractor.js, and
+the snapshot's enhancements are not being ported wholesale (Path Y
+decision).
+
+The user-language-note pattern from this issue's original step 4 is
+still valuable copy. It will resurface when SYSTEM_PROMPT is
+decomposed into prompts/ in Issue #13 (re-scoped) — preserved verbatim
+in the original spec below.
+
+[Original spec preserved below for reference]
 
 PROBLEM:
 gpt-4o-mini extractor + gpt-4.1-mini main = redundant. GPT-4.1-mini
@@ -368,8 +448,64 @@ ACCEPTANCE:
 
 ────────────────────────────────────────────────────────────────────
 
-ISSUE #5 — Intent classifier before preemptive Shopify search
+ISSUE #5 — Wire intent.js into the agent pipeline
 Branch: refactor/05-intent-classifier
+Status: PENDING (RE-SCOPED 2026-04-25 per PHASE 1 finding)
+
+RE-SCOPE NOTE (2026-04-25):
+PHASE 1 audit found that `src/modules/intent.js` already exists on
+refactor/main as a working regex-based intent classifier
+(PRODUCT_INQUIRY / COMPARISON / GENERAL_QUESTION / SUPPORT). It is
+wired into the legacy pipeline only (`response.js` + `chat.js`); the
+agent path bypasses it. Issue #5 is therefore reduced from "create
+new file" to "reuse existing module + wire into agent path + fill
+gaps".
+
+UPDATED REQUIREMENTS:
+1. Read `src/modules/intent.js` (existing). Map current 4 intents to
+   the 6 the agent path needs:
+     shopping / policy / support / greeting / meta / unknown
+2. Identify gaps and add what's missing:
+   - greeting: not currently a legacy intent (handled inline in
+     `response.js` via GREETING_PATTERN). Extract or reference.
+   - meta: missing — add MET_PATTERNS for "who are you / are you a
+     bot / are you AI" (EN/AR/FA).
+   - shopping: closely matches existing PRODUCT_INQUIRY.
+   - policy: closely matches existing GENERAL_QUESTION (filtered by
+     STRONG_GENERAL_OVERRIDE).
+3. Refactor `intent.js` so the agent pipeline can call it without
+   pulling in legacy-pipeline-only logic. Likely cleanest: add
+   `classifyForAgent(message): { intent, confidence }` exported
+   alongside the existing `detectIntent`.
+4. In `agent.js`: import `classifyForAgent`, run it BEFORE Marhale 4
+   (preemptive Shopify search). Route as below.
+5. Add unit tests covering EN / AR / FA inputs for each intent class
+   in `tests/unit/intent.test.js`.
+
+ROUTING in agent.js (after greeting/post-confirmation short-circuits,
+before Marhale 4 preemptive search):
+- intent === 'shopping' AND state.category exists → preemptive search
+  (current behavior)
+- intent === 'policy' OR 'support' → SKIP preemptive, go straight to
+  Main LLM (knowledge block already has policies)
+- intent === 'meta' → short-circuit with brief intro, localized:
+  EN: "I'm alAsil's shopping assistant. I can help you find Apple
+       products, check availability, and answer questions about
+       warranty, payment, and delivery. What can I help you with?"
+  AR / FA: equivalent translations
+- intent === 'greeting' → handled by existing greeting short-circuit
+- intent === 'unknown' → current behavior (let LLM decide)
+
+UPDATED ACCEPTANCE:
+- Manual scenarios S12, S13 pass (no Shopify call for policy/support)
+- Unit tests for each intent class with EN/AR/FA examples
+- Performance: classifyForAgent runs in <1ms (assert in test)
+- Log {intent, confidence} for every turn to enable keyword tuning
+- No regression in legacy pipeline (`detectIntent` still works for
+  `response.js` and `chat.js`)
+
+[Original spec preserved below for reference — keyword lists
+intentionally retained as starting point for the EN/AR/FA expansion]
 
 PROBLEM:
 Preemptive Shopify search runs whenever category exists. Wastes calls
@@ -437,6 +573,26 @@ TIER C — MEDIUM (architecture cleanup)
 
 ISSUE #6 — Remove FORBIDDEN_FIRST hack
 Branch: refactor/06-tool-cleanup
+Status: ✅ DONE — N/A on refactor/main (Path Y, snapshot strategy)
+
+WHY OBSOLETE (2026-04-25):
+The chat-session snapshot introduced a `FORBIDDEN_FIRST` symbol in
+`src/tools/index.js` that registered tools nominally but redirected
+their calls to findProduct. PHASE 1 audit confirmed no such symbol
+exists on refactor/main: `grep -rn 'FORBIDDEN_FIRST' src/` returns
+zero matches. Per Path Y (snapshot strategy), nothing to remove.
+
+Tools currently registered in `tools/index.js` (all 10 are real, no
+shadow redirects): findProduct, browseMenu, searchProducts,
+filterCatalog, getAvailableOptions, getBySKU, getProductByTitle,
+webFetch, verifyStock, saveCorrection.
+
+The "rationalize tool surface" idea from this issue may still be
+worth doing as a future task (e.g. trim tools the LLM rarely uses
+based on `agent-stats.js` logs), but that's a separate scope and
+not the FORBIDDEN_FIRST removal originally specified.
+
+[Original spec preserved below for reference]
 
 PROBLEM:
 Currently registers browseMenu, searchProducts, filterCatalog,
@@ -696,8 +852,64 @@ ACCEPTANCE:
 
 ────────────────────────────────────────────────────────────────────
 
-ISSUE #13 — Modular knowledge loading
-Branch: refactor/13-modular-knowledge
+ISSUE #13 — Extract SYSTEM_PROMPT to prompts/ folder + modular composition
+Branch: refactor/13-modular-prompt
+Status: PENDING (RE-SCOPED 2026-04-25 per PHASE 1 finding)
+
+RE-SCOPE NOTE (2026-04-25):
+PHASE 1 audit found that the knowledge files in `config/` are
+ALREADY modular — `knowledge.js` loads 6 separate `.md` files
+(custom_answers, policies, apple_specs, apple_current_lineup,
+payment_methods, catalog_taxonomy). The actual monolith that needs
+extracting is the **340-line `SYSTEM_PROMPT` constant in
+`agent.js`**.
+
+Issue #13 is therefore re-scoped from "modular knowledge loading"
+to "extract SYSTEM_PROMPT to prompts/ folder + modular composition".
+This re-scope also benefits Issue #12 (prompt caching): OpenAI
+prompt caching requires byte-identical prefix, which is brittle
+when SYSTEM_PROMPT is built via in-code string concatenation.
+File-based prompts make the cache key stable.
+
+UPDATED REQUIREMENTS:
+1. Create `src/prompts/` folder with:
+   - `system-base.md`     — universal rules, shared across categories
+   - `system-iphone.md`   — iPhone-specific instructions
+   - `system-mac.md`      — Mac-specific
+   - `system-ipad.md`     — iPad-specific
+   - `system-airpods.md`  — AirPods-specific
+   - `system-watch.md`    — Apple Watch-specific
+   - `system-fragments.md` — re-usable snippets: USER LANGUAGE NOTE
+     (from Issue #4 original spec), 8-step flow, OOS handling,
+     tool-routing rules
+2. Add `src/prompts/index.js` exporting:
+   - `loadPrompts()` — reads all `.md` files at startup; mirrors
+     `knowledge.js` hot-reload pattern so editing a `.md` file does
+     not require server restart.
+   - `buildSystemPrompt({ category, mode? })` — composes
+     base + category-specific + relevant fragments. Returns string.
+3. Replace the 340-line `SYSTEM_PROMPT` constant in `agent.js` with
+   a call to `buildSystemPrompt(state.category)`.
+4. Verify byte-identical output for same `category` across calls
+   (test the cache prep — same input must produce the same string).
+5. Token reduction observable on category-specific turns (iPhone
+   turn doesn't load Mac fragments).
+
+UPDATED ACCEPTANCE:
+- `agent.js` no longer contains the SYSTEM_PROMPT constant
+- All previously passing scenarios still pass
+- Token reduction logged: input_tokens before/after on category-
+  specific turns (target 30-40% reduction)
+- Unit test: same `category` → byte-identical `buildSystemPrompt`
+  output (cache prep)
+- Unit test: switching `category` between turns produces a different
+  but valid prompt
+- Manual: edit a `.md` file in `prompts/` → next agent turn uses
+  the edited version (no server restart)
+
+[Original spec preserved below for reference — its category-file
+breakdown maps roughly 1:1 to `prompts/` category files since
+both schemes split by category]
 
 PROBLEM:
 Monolithic knowledge file always loaded. iPhone turn carries
