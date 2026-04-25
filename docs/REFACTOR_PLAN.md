@@ -142,6 +142,53 @@ DISCOVERED DURING REFACTOR
      compatibility with `session.last_products` consumers — the
      issue scope is URL validation, not session-data redesign).
 
+   - 2026-04-25 (Issue #3 reconnaissance):
+
+     ### mergeProfile cross-category wipe is too aggressive
+
+     Legacy pipeline (`context.js:122`) wipes the entire
+     `session.profile` on cross-category transitions
+     (`newCategory && profile.category && newCategory !== profile.category`
+     → `next = { ...newEntities }`). This loses budget / usage / feature
+     preferences that should arguably survive a category change. Out
+     of scope for Issue #3 (agent-only per Decision 1) but worth a
+     future legacy-cleanup issue if/when the legacy pipeline is being
+     touched.
+
+   - 2026-04-25 (Issue #3 reconnaissance):
+
+     ### mergeProfile silently rewrites category on M-chip detection
+
+     Legacy `mergeProfile` at `context.js:124-126` has a
+     `conflictingChip` branch — if newEntities has an M-chip but
+     `profile.category` is iPhone, it silently switches to category
+     'Mac'. Brittle: a customer typo like "iPhone with M3" would
+     coerce them into Mac results. Pre-existing oddity. Not Issue #3
+     territory.
+
+   - 2026-04-25 (Issue #3 STEP 2 Decision 4 — parking lot):
+
+     ### Pivot phrase false-positive monitoring (post-deploy)
+
+     `PIVOT_TOKENS` in `src/utils/pivot-phrase.js` uses the spec's
+     verbatim multi-language patterns. Some tokens (e.g., bare "no" /
+     "na" / "لا" in EN/FA/AR, "actually" in EN) may match conversational
+     filler that wasn't actually a pivot intent.
+
+     The downstream effect is bounded: pivot only triggers state reset
+     when paired with category/family change OR when alone (Case 5:
+     pivot+nothing → reset_full). Lone false positives still cost the
+     user a fresh-start session, which is recoverable but annoying.
+
+     **Action (post-deploy):** monitor `'state reset applied'` logs in
+     production for cases where `pivotDetected: true` led to
+     `focusAction: 'reset_full'` unnecessarily. Tune the token list
+     based on observed patterns. Consider adding stop-word gating
+     ("actually fine" should not trigger).
+
+     **Out of scope for Issue #3.** Initial regex is the spec's
+     verbatim list.
+
 ═══════════════════════════════════════════════════════════════════════
 
 ## Incidents
@@ -473,9 +520,36 @@ ACCEPTANCE:
 ────────────────────────────────────────────────────────────────────
 
 ISSUE #3 — Family-change reset is too aggressive
-Branch: refactor/03-family-reset-precision
+Branch: refactor/03-family-reset
 
-PROBLEM:
+PROBLEM (rewritten 2026-04-25 per Issue #3 reconnaissance):
+The agent path on refactor/main has NO automatic family-change or
+category-change reset logic. State transitions (iPhone 15 → iPhone 16
+→ MacBook) flow through `session.focus` via merge-only logic in
+`routes/telegram.js handleAgent`, with `session.last_products` simply
+overwritten on every successful tool call. There is no pivot-phrase
+detection ("instead", "actually", "vali", "بدلا").
+
+This causes two problems on the agent path:
+  (a) Stale `session.last_products` survives cross-category transitions
+      (iPhone → MacBook), confusing the LLM's LAST PRODUCTS context.
+  (b) `session.focus` accumulates incompatible fields across category
+      transitions (e.g. category=Mac but family=iPhone 15 from prior
+      turn) due to merge-only updates.
+
+The "current reset wipes ALL family-specific specs" sentence in the
+original spec describes legacy `mergeProfile` behavior in
+`context.js:122` (legacy pipeline only) — not the agent path.
+
+Issue #3 adds explicit pivot-phrase detection + a state-reset decision
+function for the agent path. Legacy `mergeProfile` is out of scope
+(Issue #1/#2 scope discipline: agent-path-only).
+
+[Original PROBLEM section retained below for traceability — describes
+legacy-pipeline behavior, not agent-path reality. See Issue #3
+reconnaissance.]
+
+ORIGINAL PROBLEM (legacy mergeProfile, not agent-path):
 Current reset wipes ALL family-specific specs whenever a different
 family is detected. Breaks comparison flows: "iPhone 16 specs?" →
 "compare with 15" → context wiped, bot forgets iPhone 16 conversation.
@@ -508,13 +582,45 @@ When reset triggered, log reason:
   console.log('[STATE] Specs reset:', { reason: 'category_change' |
     'pivot_phrase', from: oldFamily, to: newFamily })
 
-ACCEPTANCE:
-- Manual scenarios S6, S7 pass
-- Unit test: iPhone 15 → iPhone 16 (no pivot) → storage/color preserved
-- Unit test: iPhone 15 → "instead show me 16" → full reset
-- Unit test: iPhone 15 → MacBook → full reset (category change)
-- Unit test: iPhone 15 64GB Black → iPhone 16 → state has 64GB Black
-  preserved, family updated
+ACCEPTANCE (rewritten 2026-04-25 per Decision 2 — agent-path session
+shape lacks storage/color/region at session level; specs flow through
+session.last_products and the LAST PRODUCTS context block):
+
+- Manual scenarios S6, S7 pass (covered by integration test until
+  MANUAL_TESTS.md is written)
+- Unit test: same-category family transition (iPhone 15 → iPhone 16)
+  with no pivot phrase → session.focus.family updated, session.focus
+  .category preserved, session.last_products preserved
+- Unit test: same-category family transition WITH pivot phrase
+  ("actually show me iPhone 16") → session.focus updated,
+  session.last_products cleared (signal: user changed direction)
+- Unit test: cross-category transition (iPhone → MacBook) without
+  pivot → session.focus.category updates, session.last_products
+  cleared (cross-category implies fresh search)
+- Unit test: cross-category transition WITH pivot ("actually I want
+  a MacBook") → session.focus.family/model_key/variant cleared (drop
+  iPhone-era stale fields), category updates, session.last_products
+  cleared
+- Unit test: pivot phrase with no category change ("actually never
+  mind") → session.focus AND session.last_products fully cleared
+  (user backing out)
+
+DECISION MATRIX (full table — implemented in src/utils/state-reset.js
+decideStateReset({pivotDetected, focusBefore, focusAfter})):
+
+  pivot  | category change | family change | focusAction         | clearLastProducts
+  -------|-----------------|---------------|---------------------|-------------------
+  yes    | yes             | (n/a)         | reset_to_category   | yes
+  yes    | no              | yes           | keep                | yes
+  no     | yes             | (n/a)         | keep                | yes
+  no     | no              | yes           | keep                | no
+  yes    | no              | no            | reset_full          | yes
+  no     | no              | no            | keep                | no
+
+The `clearPendingAction` field of the decision object is informational
+for Tier A merge with Issue #1 (which adds pending_action fields to
+session). On refactor/03-family-reset alone, those fields don't exist
+and the boolean is unused.
 
 ────────────────────────────────────────────────────────────────────
 TIER B — HIGH (architecture / cost) — do these second
@@ -1330,6 +1436,33 @@ Branch protocol:
 - All refactor work on `refactor/NN-<slug>` branches
 - Each completed issue merges into `refactor/main` (NOT origin/main)
 - `refactor/main` never auto-deploys
+
+Tier A Merge Follow-up Commits (after Issues #1, #2, #3 are merged
+to refactor/main, BEFORE deploying to staging):
+
+1. Replace Issue #1's `shouldClearForCategoryChange(session)` predicate
+   with Issue #3's `applyResetDecision` integration. In handleAgent:
+   - Remove the standalone `shouldClearForCategoryChange(session)` call
+   - Where `decision.clearPendingAction === true` (returned from
+     decideStateReset in Issue #3's flow), call
+     `clearPendingAction(session)` (Issue #1's helper)
+   - This unifies pending_action lifecycle with the rest of state reset
+     under one decision matrix
+   - Estimate: ~5 lines, 1 commit
+
+2. Restore vitest.config.js coverage threshold settings: Issue #1's
+   threshold-to-0 fix lives on its branch. Cherry-pick to refactor/main
+   during merge OR accept as part of merge resolution. Either path
+   leaves the same final state. Just make sure it lands.
+
+3. Verify combined test suite still passes on refactor/main after merge:
+   - Issue #1: 81 tests
+   - Issue #2: 43 tests
+   - Issue #3: 69 tests
+   - Combined target: ~193 tests, all green
+
+4. Update docs/REFACTOR_PLAN.md "Tier A Status" to ✅ DONE with the
+   merge commit hashes recorded.
 
 Deployment cadence:
 - Tier A (Issues 1-3) complete + tested → merge `refactor/main` into

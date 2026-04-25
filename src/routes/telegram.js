@@ -10,6 +10,8 @@ import { buildResponse } from '../modules/response.js';
 import { runAgent } from '../modules/agent.js';
 import { resolveOptionPick, smartSpecFallback } from '../modules/option-match.js';
 import { isAffirmative } from '../utils/affirmative.js';
+import { isPivotPhrase } from '../utils/pivot-phrase.js';
+import { decideStateReset, applyResetDecision } from '../utils/state-reset.js';
 
 // Issue #1: stale-pending-action TTL. Past this many ms since SET, the flag
 // is considered stale (user moved on) and is cleared on the next turn before
@@ -221,6 +223,15 @@ export async function handleAgent(msg, session, sessionId, userText) {
     // Fail-open: pending product not in last_products, fall through to runAgent.
   }
 
+  // ── Issue #3: capture focusBefore + detect pivot BEFORE runAgent ──
+  // focusBefore is a shallow snapshot of session.focus at handleAgent entry.
+  // Combined with focusAfter (post-runAgent) and pivotDetected, this drives
+  // the state-reset decision applied after runAgent returns.
+  // Ordered AFTER Issue #1's SC fast-path: if SC fires (early return), we
+  // skip this snapshot too — saves wasted compute on confirmation hits.
+  const focusBefore = session.focus ? { ...session.focus } : null;
+  const pivotDetected = isPivotPhrase(userText);
+
   await sendChatAction(chatId, 'typing', { threadId });
 
   const agentResult = await runAgent({
@@ -272,9 +283,42 @@ export async function handleAgent(msg, session, sessionId, userText) {
   // ── Issue #1: category-change-clear (naive — Issue #3 will refine) ──
   // TODO: Issue #3 will refine this with explicit pivot detection.
   // For now: any category change clears pending state.
+  // Ordered BEFORE Issue #3's applyResetDecision so this naive predicate
+  // sees post-runAgent session state, not post-reset state. Step 5 wiring
+  // follow-up will replace this block with: if (resetDecision.clearPendingAction)
+  // clearPendingAction(session) — gated on Issue #3's richer decision matrix.
   if (shouldClearForCategoryChange(session)) {
     clearPendingAction(session);
   }
+
+  // ── Issue #3: state-reset decision based on transition + pivot ──
+  // focusAfter is the post-merge snapshot. decideStateReset compares it to
+  // focusBefore (captured at handleAgent entry) and produces an action.
+  // applyResetDecision mutates session.focus and session.last_products
+  // accordingly. clearPendingAction is informational on this branch — at
+  // Tier A merge, the receiving handleAgent calls clearPendingAction(session)
+  // when the boolean is true (Issue #1's helper).
+  const focusAfter = session.focus ? { ...session.focus } : null;
+  const resetDecision = decideStateReset({ pivotDetected, focusBefore, focusAfter });
+  if (
+    resetDecision.focusAction !== 'keep' ||
+    resetDecision.clearLastProducts ||
+    resetDecision.clearPendingAction
+  ) {
+    logger.info(
+      {
+        sessionId,
+        pivotDetected,
+        focusAction: resetDecision.focusAction,
+        clearLastProducts: resetDecision.clearLastProducts,
+        clearPendingAction: resetDecision.clearPendingAction,
+        focusBefore,
+        focusAfter,
+      },
+      'state reset applied'
+    );
+  }
+  applyResetDecision(session, resetDecision);
 
   appendHistory(session, 'assistant', agentResult.text);
   await saveSession(sessionId, session);
