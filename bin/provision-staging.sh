@@ -185,7 +185,9 @@ if [ -z "$VENV_BIN" ]; then
   exit 1
 fi
 # shellcheck disable=SC1091
+set +u  # cloudlinux activate script references unset CL_VIRTUAL_ENV (line 78)
 source "$VENV_BIN/activate"
+set -u
 echo "[deploy] node $(node -v), npm $(npm -v)"
 echo "[deploy] Installing dependencies (npm ci)..."
 npm ci --no-audit --no-fund
