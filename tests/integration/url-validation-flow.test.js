@@ -3,6 +3,7 @@ import {
   postProcessReply,
   deriveHandle,
   accumulateSurfacedHandles,
+  pickProductList,
 } from '../../src/modules/agent.js';
 
 // These tests exercise the full agent post-process pipeline:
@@ -319,5 +320,64 @@ describe('accumulateSurfacedHandles — supports both products and candidates', 
     accumulateSurfacedHandles({ products: [{ handle: 'x' }] }, null);
     accumulateSurfacedHandles({ products: [{ handle: 'x' }] }, []);
     // (no assertion needed; just ensuring it doesn't throw)
+  });
+});
+
+// Issue #2 follow-up (corrections): pickProductList drives session.last_products
+// (via collectedProducts in agent.js). Pre-fix, this only checked result.products,
+// so findProduct's result.candidates never reached session.last_products, breaking
+// Issue #1's maybeSetPendingAction heuristic. The "SC#2 structurally inert"
+// finding from a17ae00 was a misdiagnosis of THIS bug.
+describe('pickProductList — picks the product list from inconsistent tool result fields', () => {
+  it('returns result.products when present (browseMenu / searchProducts / filterCatalog)', () => {
+    const list = pickProductList({
+      products: [{ handle: 'iphone-15-pro' }, { handle: 'iphone-15-plus' }],
+    });
+    expect(list).toHaveLength(2);
+    expect(list[0].handle).toBe('iphone-15-pro');
+  });
+
+  it('falls back to result.candidates when products absent (findProduct — root-cause fix)', () => {
+    const list = pickProductList({
+      step: 'candidates',
+      candidates: [
+        {
+          handle:
+            'apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim',
+        },
+      ],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0].handle).toBe(
+      'apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim'
+    );
+  });
+
+  it('returns empty when neither field is populated (no_stock_in_category, category_unknown, etc.)', () => {
+    expect(pickProductList({})).toEqual([]);
+    expect(pickProductList({ step: 'no_stock_in_category' })).toEqual([]);
+    expect(pickProductList(null)).toEqual([]);
+    expect(pickProductList(undefined)).toEqual([]);
+  });
+
+  it('precedence: when both products and candidates are populated, products wins', () => {
+    // Defensive: this is unlikely in current tools but documents the contract.
+    // products is the canonical name; candidates is a fallback for findProduct.
+    const list = pickProductList({
+      products: [{ handle: 'from-products' }],
+      candidates: [{ handle: 'from-candidates' }],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0].handle).toBe('from-products');
+  });
+
+  it('handles empty arrays as if absent (empty products → fall back to candidates)', () => {
+    // Edge case: products: [] should NOT short-circuit before checking candidates.
+    const list = pickProductList({
+      products: [],
+      candidates: [{ handle: 'fallback-h' }],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0].handle).toBe('fallback-h');
   });
 });

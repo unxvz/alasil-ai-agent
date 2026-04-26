@@ -452,6 +452,24 @@ export function accumulateSurfacedHandles(result, surfacedHandles) {
   }
 }
 
+// Issue #2 follow-up (corrections): pick the product list from a tool result.
+// Same field-name mismatch as accumulateSurfacedHandles — findProduct uses
+// result.candidates, others use result.products. Used to populate
+// session.last_products. Returns [] if neither field has a non-empty array.
+// Precedence: products > candidates (products is the canonical name; candidates
+// is a fallback for findProduct).
+//
+// Exported for unit testing — see tests/integration/url-validation-flow.test.js
+export function pickProductList(result) {
+  if (Array.isArray(result?.products) && result.products.length > 0) {
+    return result.products;
+  }
+  if (Array.isArray(result?.candidates) && result.candidates.length > 0) {
+    return result.candidates;
+  }
+  return [];
+}
+
 // Issue #2: post-process the raw LLM reply through the full pipeline.
 //   stripFormatting → validateUrls → enforceParagraphBreaks
 // Order matters: stripFormatting collapses markdown link syntax to bare
@@ -687,9 +705,16 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
           args = {};
         }
         const result = await executeTool(tc.function?.name, args);
+        // Tool result field names are inconsistent: findProduct uses
+        // 'candidates', browseMenu/searchProducts/filterCatalog use 'products',
+        // getAvailableOptions uses 'values'. Include all three in the count
+        // so telemetry is accurate. Pre-fix, findProduct successes were
+        // logged as count:0 — see "Discovered During Refactor".
         const count =
           Array.isArray(result?.products)
             ? result.products.length
+            : Array.isArray(result?.candidates)
+            ? result.candidates.length
             : Array.isArray(result?.values)
             ? result.values.length
             : 0;
@@ -701,8 +726,14 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
         // tracked in REFACTOR_PLAN.md "Discovered During Refactor". For URL
         // validation correctness across multi-tool-call turns, we accumulate
         // handles into `surfacedHandles` separately right below.
-        if (Array.isArray(result?.products) && result.products.length > 0) {
-          collectedProducts = result.products.slice(0, 4);
+        // Issue #2 follow-up (corrections): pickProductList falls back to
+        // result.candidates for findProduct, which returns its products there
+        // instead of result.products. Without this, session.last_products was
+        // always empty after findProduct calls, and Issue #1's
+        // maybeSetPendingAction never saw a single-product result.
+        const productList = pickProductList(result);
+        if (productList.length > 0) {
+          collectedProducts = productList.slice(0, 4);
         }
         // Issue #2: accumulate handles from EVERY tool call's products so
         // the URL validator's allow-list covers the full turn (not just
