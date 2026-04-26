@@ -427,6 +427,31 @@ export function deriveHandle(p) {
   return extractHandleFromUrl(p.url || '');
 }
 
+// Issue #2 follow-up (corrections): accumulate handles from a tool result
+// into the surfacedHandles allow-list. Tools return their products in
+// inconsistent fields:
+//   - findProduct → result.candidates
+//   - browseMenu / searchProducts / filterCatalog → result.products
+//   - getAvailableOptions → result.values (no handles, ignored)
+// This helper covers both products + candidates so URLs from any product-
+// returning tool make it into the allow-list. Without the candidates branch,
+// every URL the LLM derived from findProduct results was stripped by the
+// validator. See "Discovered During Refactor" entry on the field-name
+// mismatch.
+//
+// Exported for integration testing — see tests/integration/url-validation-flow.test.js
+export function accumulateSurfacedHandles(result, surfacedHandles) {
+  if (!result || !(surfacedHandles instanceof Set)) return;
+  for (const arr of [result.products, result.candidates]) {
+    if (Array.isArray(arr)) {
+      for (const p of arr) {
+        const h = deriveHandle(p);
+        if (h) surfacedHandles.add(h);
+      }
+    }
+  }
+}
+
 // Issue #2: post-process the raw LLM reply through the full pipeline.
 //   stripFormatting → validateUrls → enforceParagraphBreaks
 // Order matters: stripFormatting collapses markdown link syntax to bare
@@ -682,12 +707,7 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
         // Issue #2: accumulate handles from EVERY tool call's products so
         // the URL validator's allow-list covers the full turn (not just
         // the last tool's results).
-        if (Array.isArray(result?.products)) {
-          for (const p of result.products) {
-            const h = deriveHandle(p);
-            if (h) surfacedHandles.add(h);
-          }
-        }
+        accumulateSurfacedHandles(result, surfacedHandles);
 
         messages.push({
           role: 'tool',
