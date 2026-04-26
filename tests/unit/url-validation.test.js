@@ -207,4 +207,89 @@ describe('validateUrls', () => {
       expect(result.stripped).toEqual([]);
     });
   });
+
+  // Bug B v1: when a URL is stripped, also strip any "Here is the link:" /
+  // "click below:" style lead-in line that introduced it. Without this the
+  // reply reads as contradictory dual messaging.
+  describe('lead-in stripping (Bug B v1, EN-only)', () => {
+    it('strips Mohammad case: "Here is the link to <product>:" lead-in along with the URL', () => {
+      const text =
+        'Here is the link to the iPhone 17 Pro Max 256GB Deep Blue Middle East Version you chose:\n\n' +
+        'https://alasil.ae/products/apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim\n\n' +
+        'Would you like me to help you with anything else?';
+      const result = validateUrls(text, allow('iphone-15-pro')); // mismatched handle → strip
+      expect(result.text).not.toContain('Here is the link');
+      expect(result.text).not.toContain('https://alasil.ae');
+      expect(result.text).toContain('Would you like me to help');
+      expect(result.text).toContain('WhatsApp');
+    });
+
+    it('does NOT strip lead-in when the URL is valid (gated on stripped.length > 0)', () => {
+      const text = 'Here is the link: https://alasil.ae/products/iphone-15-pro';
+      const result = validateUrls(text, allow('iphone-15-pro'));
+      expect(result.text).toContain('Here is the link:');
+      expect(result.text).toContain('https://alasil.ae/products/iphone-15-pro');
+      expect(result.text).not.toContain('WhatsApp');
+      expect(result.stripped).toEqual([]);
+    });
+
+    it('strips multiple lead-ins when multiple URLs are stripped', () => {
+      const text =
+        'Option 1:\n\nClick here: https://alasil.ae/products/bad-1\n\n' +
+        'Option 2:\n\nThe link to product 2: https://alasil.ae/products/bad-2\n\n' +
+        'Choose one.';
+      const result = validateUrls(text, allow('good'));
+      expect(result.text).not.toContain('Click here:');
+      expect(result.text).not.toContain('The link to product 2');
+      expect(result.text).toContain('Choose one.');
+      expect(result.text).toContain('WhatsApp');
+      expect(result.stripped.length).toBe(2);
+    });
+
+    it("strips Here's contraction lead-in at start of message", () => {
+      const text =
+        "Here's the link to your order:\n\nhttps://alasil.ae/products/fake\n\nMore details below.";
+      const result = validateUrls(text, allow('real'));
+      expect(result.text).not.toContain("Here's the link");
+      expect(result.text).toContain('More details below.');
+      expect(result.text).toContain('WhatsApp');
+    });
+
+    it('does NOT strip lead-in lines longer than 100 chars (documented v1 limitation)', () => {
+      const lead =
+        'Here is the link to the very-long-product-name with extra description text that exceeds the one-hundred char limit:';
+      // Sanity-check the limit assumption.
+      expect(lead.length).toBeGreaterThan(100);
+      const text = `${lead}\n\nhttps://alasil.ae/products/fake\n\nNext paragraph.`;
+      const result = validateUrls(text, allow('real'));
+      // URL is stripped, but lead-in stays (documented limitation).
+      expect(result.text).toContain(lead);
+      expect(result.text).toContain('Next paragraph.');
+      expect(result.text).toContain('WhatsApp');
+    });
+
+    it('preserves generic colon-ending lines that lack link-introducing words', () => {
+      const text =
+        'Here are the options:\n\nhttps://alasil.ae/products/fake\n\nWhich one?';
+      const result = validateUrls(text, allow('real'));
+      expect(result.text).toContain('Here are the options:'); // no "link" word → preserved
+      expect(result.text).toContain('Which one?');
+      expect(result.text).toContain('WhatsApp');
+    });
+
+    it('handles bare URL with no lead-in (no regression from prior behavior)', () => {
+      const text = 'Sure thing! https://alasil.ae/products/fake';
+      const result = validateUrls(text, allow('real'));
+      expect(result.stripped.length).toBe(1);
+      expect(result.text).toContain('WhatsApp');
+      expect(result.text).not.toContain('https://');
+    });
+
+    it('passes through unchanged when no URL and no lead-in present', () => {
+      const text = 'Hello! How can I help you today?';
+      const result = validateUrls(text, allow('iphone-15-pro'));
+      expect(result.text).toBe(text);
+      expect(result.stripped).toEqual([]);
+    });
+  });
 });

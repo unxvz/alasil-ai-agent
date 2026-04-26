@@ -28,6 +28,30 @@ const URL_RE = /https?:\/\/[^\s<>"\)\]]+/g;
 // trailing period as part of the URL).
 const TRAILING_PUNCT = /[.,!?;:]+$/;
 
+// Bug B v1 (EN-only): lead-in patterns that introduce a URL on a colon-ending
+// line. When a URL is stripped (hallucinated handle), the preceding lead-in
+// would otherwise dangle: "Here is the link:\n\nPlease contact WhatsApp..."
+// reads as contradictory dual messaging. Strip the lead-in too.
+//
+// Each pattern:
+//  - matches a SINGLE line (no newlines in the matched span)
+//  - is anchored to a colon at end-of-line
+//  - bounds the WHOLE line to ≤100 chars via lookahead — prevents matching
+//    long unrelated sentences that happen to contain "link" / "click" / etc.
+//
+// Multi-language patterns (Arabic / Persian) deferred to v2 — see
+// "Discovered During Refactor" in REFACTOR_PLAN.md.
+const LEAD_IN_RES = [
+  // "Here is the link to X:" / "Here's the link:" / "This is the link:"
+  /^(?=[^\n]{1,100}$)[^\n]*?\b(?:here|this)(?:\s+is|\s+are|'s)\s+(?:the|a|your)?\s*link[^.!?\n]*?:\s*$/gim,
+  // "Click here:" / "Use the link below:" / "Follow the link:" / "Tap below:"
+  /^(?=[^\n]{1,100}$)[^\n]*?\b(?:click|use|follow|view|tap)\s+(?:here|below|the\s+link)[^.!?\n]*?:\s*$/gim,
+  // "The link to X:" / "Link to your order:"
+  /^(?=[^\n]{1,100}$)[^\n]*?\b(?:the\s+)?link\s+to\s+[^.!?\n]*?:\s*$/gim,
+  // "Available at:" / "Buy it at:" / "Find it at:" / "View it at:"
+  /^(?=[^\n]{1,100}$)[^\n]*?\b(?:available|buy\s+it|find\s+it|view\s+it)\s+at\s+[^.!?\n]*?:\s*$/gim,
+];
+
 // Extract the product handle from any URL whose path is /products/<handle>.
 // Returns null on:
 //   - malformed URLs (URL constructor throws)
@@ -87,9 +111,19 @@ export function validateUrls(text, allowedHandles, options = {}) {
     return { text: next, stripped: [] };
   }
 
+  // Bug B v1: strip "Here is the link:" / "click below:" / "the link to X:"
+  // style lead-in lines that introduced a now-stripped URL. Without this the
+  // reply reads "Here is the link:\n\nPlease contact us on WhatsApp..." which
+  // is contradictory. Gated on stripped.length > 0 so valid URLs are never
+  // affected. EN patterns only in v1.
+  let withoutLeadIn = next;
+  for (const re of LEAD_IN_RES) {
+    withoutLeadIn = withoutLeadIn.replace(re, '');
+  }
+
   // Collapse blank lines/spaces left where URLs were removed, then append
   // the fallback message once.
-  const cleaned = next
+  const cleaned = withoutLeadIn
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/^[ \t]+|[ \t]+$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
