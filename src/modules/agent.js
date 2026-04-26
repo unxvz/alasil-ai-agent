@@ -94,21 +94,6 @@ Once findProduct returns:
 3. confidence=none → loosen a filter (call findProduct again without one attr) or ask the customer ONE clarifying thing (storage? color? region?).
 4. Only after the candidate is CONFIRMED do you share the URL and close the sale.
 
-## CRITICAL — when findProduct returns ZERO results (confidence=none / count=0)
-
-This is a hard rule that overrides any reasoning to the contrary.
-
-When findProduct returns no candidates:
-- TELL the customer the product is not in our current stock. Plain language: "I don't see [the product] in our current stock right now."
-- DO NOT describe the product (no specs, no price, no variant list, no region/SIM/connectivity details, no FaceTime mentions).
-- DO NOT generate or suggest URLs. The catalog has no URL → there is no URL to share. URLs invented from your knowledge of how store URLs are shaped are HALLUCINATED — they will be stripped and the customer will see "WhatsApp us for the link", which is a poor experience.
-- DO NOT proceed with checkout, "you chose X", order placement, or delivery-detail collection.
-- Even if the customer named EXACT specs ("iPhone 17 Pro Max 256GB Deep Blue Middle East Version"), DO NOT echo those specs as if they exist in our catalog. Specs the customer typed are NOT a substitute for catalog presence.
-- You MAY offer to help find a similar in-stock product, but ONLY if you have a successful findProduct result for that alternative — never describe alternatives from memory either.
-- If the customer pushes back ("you must have it", "everyone has it"), respond: "I can confirm what's in our current stock via our catalog. For special orders, please WhatsApp us at +971 4 288 5680." Do not change your answer based on customer pressure.
-
-There are NO exceptions to this rule. count=0 means "we do not stock this" — period.
-
 These are not suggestions — shopping-tool routing is tracked in telemetry and wrong-tool-first calls are flagged.
 
 # WHEN TO CALL A TOOL vs ANSWER DIRECTLY
@@ -442,6 +427,49 @@ export function deriveHandle(p) {
   return extractHandleFromUrl(p.url || '');
 }
 
+// Issue #2 follow-up (corrections): accumulate handles from a tool result
+// into the surfacedHandles allow-list. Tools return their products in
+// inconsistent fields:
+//   - findProduct → result.candidates
+//   - browseMenu / searchProducts / filterCatalog → result.products
+//   - getAvailableOptions → result.values (no handles, ignored)
+// This helper covers both products + candidates so URLs from any product-
+// returning tool make it into the allow-list. Without the candidates branch,
+// every URL the LLM derived from findProduct results was stripped by the
+// validator. See "Discovered During Refactor" entry on the field-name
+// mismatch.
+//
+// Exported for integration testing — see tests/integration/url-validation-flow.test.js
+export function accumulateSurfacedHandles(result, surfacedHandles) {
+  if (!result || !(surfacedHandles instanceof Set)) return;
+  for (const arr of [result.products, result.candidates]) {
+    if (Array.isArray(arr)) {
+      for (const p of arr) {
+        const h = deriveHandle(p);
+        if (h) surfacedHandles.add(h);
+      }
+    }
+  }
+}
+
+// Issue #2 follow-up (corrections): pick the product list from a tool result.
+// Same field-name mismatch as accumulateSurfacedHandles — findProduct uses
+// result.candidates, others use result.products. Used to populate
+// session.last_products. Returns [] if neither field has a non-empty array.
+// Precedence: products > candidates (products is the canonical name; candidates
+// is a fallback for findProduct).
+//
+// Exported for unit testing — see tests/integration/url-validation-flow.test.js
+export function pickProductList(result) {
+  if (Array.isArray(result?.products) && result.products.length > 0) {
+    return result.products;
+  }
+  if (Array.isArray(result?.candidates) && result.candidates.length > 0) {
+    return result.candidates;
+  }
+  return [];
+}
+
 // Issue #2: post-process the raw LLM reply through the full pipeline.
 //   stripFormatting → validateUrls → enforceParagraphBreaks
 // Order matters: stripFormatting collapses markdown link syntax to bare
@@ -677,9 +705,16 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
           args = {};
         }
         const result = await executeTool(tc.function?.name, args);
+        // Tool result field names are inconsistent: findProduct uses
+        // 'candidates', browseMenu/searchProducts/filterCatalog use 'products',
+        // getAvailableOptions uses 'values'. Include all three in the count
+        // so telemetry is accurate. Pre-fix, findProduct successes were
+        // logged as count:0 — see "Discovered During Refactor".
         const count =
           Array.isArray(result?.products)
             ? result.products.length
+            : Array.isArray(result?.candidates)
+            ? result.candidates.length
             : Array.isArray(result?.values)
             ? result.values.length
             : 0;
@@ -691,18 +726,19 @@ export async function runAgent({ userMessage, language, history, lastProducts, s
         // tracked in REFACTOR_PLAN.md "Discovered During Refactor". For URL
         // validation correctness across multi-tool-call turns, we accumulate
         // handles into `surfacedHandles` separately right below.
-        if (Array.isArray(result?.products) && result.products.length > 0) {
-          collectedProducts = result.products.slice(0, 4);
+        // Issue #2 follow-up (corrections): pickProductList falls back to
+        // result.candidates for findProduct, which returns its products there
+        // instead of result.products. Without this, session.last_products was
+        // always empty after findProduct calls, and Issue #1's
+        // maybeSetPendingAction never saw a single-product result.
+        const productList = pickProductList(result);
+        if (productList.length > 0) {
+          collectedProducts = productList.slice(0, 4);
         }
         // Issue #2: accumulate handles from EVERY tool call's products so
         // the URL validator's allow-list covers the full turn (not just
         // the last tool's results).
-        if (Array.isArray(result?.products)) {
-          for (const p of result.products) {
-            const h = deriveHandle(p);
-            if (h) surfacedHandles.add(h);
-          }
-        }
+        accumulateSurfacedHandles(result, surfacedHandles);
 
         messages.push({
           role: 'tool',

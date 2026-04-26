@@ -1643,6 +1643,20 @@ never SET, and the SC#2 fast-path on subsequent "yes" turns never fires.
 **Out of scope for Tier A.** Tier A's goal was structural integration. This
 is an effectiveness finding for a future tier.
 
+**RETRACTED — root cause was a field-name mismatch, not LLM behavior.**
+Subsequent investigation (commit on refactor/02-followup-corrections branch)
+revealed the SC#2 inertness was caused by `collectedProducts` reading
+`result.products` only, while `findProduct` returns its products in
+`result.candidates`. Successful `findProduct` calls never populated
+`session.last_products`, so `maybeSetPendingAction`'s "1 product" check
+could never see a single product from `findProduct`. The
+LLM-disambiguation diagnosis above was wrong — the LLM was returning
+disambiguation prompts AND single-candidate results, but the agent was
+discarding both because of the field-name bug. With `collectedProducts`
+now reading from `candidates` as a fallback, SC#2 may fire naturally —
+to be observed in the next staging soak. See the new "Tool result
+field-name inconsistency" entry below for the full root-cause analysis.
+
 ### Worker stability under sequential POST load (informational)
 
 LSWS Passenger (`lsnode`) pinned all sweep traffic to a single worker
@@ -1667,6 +1681,53 @@ The agent's retry/backoff handler worked correctly (no errors propagated
 to users; turns just took 70-97s instead of the usual 2-5s). Capacity
 data point for future load testing or production-traffic capacity
 planning.
+
+### Tool result field-name inconsistency (candidates / products / values)
+
+`findProduct` returns its products in `result.candidates`. Other tools
+(`browseMenu`, `searchProducts`, `filterCatalog`) return them in
+`result.products`. `getAvailableOptions` returns options in `result.values`.
+Consumer code in `agent.js` was inconsistently checking only some of these
+fields, causing **three independent symptoms with the same root cause**:
+
+1. **count metric** (agent.js `tool_calls.count` field) — checked
+   `products` + `values`, never `candidates`. `findProduct` calls always
+   logged `count: 0` even on success. The "17% findProduct count=0"
+   production rate cited as the rationale for adding the Bug A
+   hallucination guard was meaningless — it was measuring "successful
+   `findProduct` calls" thinking it was measuring "failed/empty calls".
+
+2. **surfacedHandles** (Issue #2's URL allow-list) — iterated `products`
+   only, never `candidates`. Every URL the LLM derived from a successful
+   `findProduct` result got stripped as "hallucinated" and replaced with
+   the WhatsApp fallback. Mohammad's iPhone 17 Pro Max query revealed
+   this on staging: the catalog had the exact product (handle
+   `apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim`,
+   price AED 5545), `findProduct` returned it, the LLM emitted the
+   correct URL, and Issue #2 stripped it because `surfacedHandles` was
+   empty.
+
+3. **collectedProducts** (drives `session.last_products`) — populated
+   from `products` only, never `candidates`. `session.last_products` was
+   always empty after `findProduct` calls. This means Issue #1's
+   `maybeSetPendingAction` heuristic ("1 product, no URL → SET pending")
+   never saw a single-product result from `findProduct`, so SC#2 never
+   had a chance to fire on confirmation turns. The "SC#2 structurally
+   inert in production-like LLM behavior" finding above was a misdiagnosis
+   of THIS bug — see the RETRACTED note added to that entry.
+
+All three symptoms have a one-line fix (also iterate / count
+`candidates`). Fixed in three commits on the
+`refactor/02-followup-corrections` branch (Phase 1 reverted Bug A's
+prompt change, Phase 2 fixed `surfacedHandles`, Phase 3 fixed
+`collectedProducts` + `count` metric and amended this doc).
+
+**Future Tier B work:** normalize tool result field names. Either rename
+`candidates` → `products` in `findProduct`, OR add a thin adapter at the
+`executeTool` boundary that promotes `candidates` to `products`. Either
+way removes the entire bug class. Until then, every consumer of tool
+results in `agent.js` needs to handle both names defensively (now done
+via `pickProductList` and `accumulateSurfacedHandles` helpers).
 
 ═══════════════════════════════════════════════════════════════════════
 ISSUE STATUS TABLE

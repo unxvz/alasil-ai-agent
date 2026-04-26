@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { postProcessReply, deriveHandle } from '../../src/modules/agent.js';
+import {
+  postProcessReply,
+  deriveHandle,
+  accumulateSurfacedHandles,
+  pickProductList,
+} from '../../src/modules/agent.js';
 
 // These tests exercise the full agent post-process pipeline:
 //   stripFormatting → validateUrls → enforceParagraphBreaks
@@ -231,5 +236,148 @@ describe('deriveHandle — surfacedHandles seed/accumulation logic', () => {
     expect(surfacedHandles.has('iphone-15-plus')).toBe(true);
     expect(surfacedHandles.has('iphone-15')).toBe(true);
     expect(surfacedHandles.has('apple-watch-ultra-3')).toBe(true);
+  });
+});
+
+// Issue #2 follow-up (corrections): findProduct returns its products in
+// result.candidates, not result.products. Before this fix, every URL the
+// LLM derived from findProduct results was stripped by the validator.
+// See "Discovered During Refactor" entry on the field-name mismatch.
+describe('accumulateSurfacedHandles — supports both products and candidates', () => {
+  it('accumulates handles from result.products (browseMenu / searchProducts / filterCatalog)', () => {
+    const set = new Set();
+    accumulateSurfacedHandles(
+      { products: [{ handle: 'iphone-15-pro' }, { handle: 'iphone-15-plus' }] },
+      set
+    );
+    expect(set.size).toBe(2);
+    expect(set.has('iphone-15-pro')).toBe(true);
+    expect(set.has('iphone-15-plus')).toBe(true);
+  });
+
+  it('accumulates handles from result.candidates (findProduct — root-cause fix)', () => {
+    const set = new Set();
+    // Mohammad's exact case: catalog has this handle, findProduct returns
+    // it as a candidate, but pre-fix surfacedHandles never knew about it.
+    accumulateSurfacedHandles(
+      {
+        step: 'candidates',
+        category: 'iPhone',
+        candidates: [
+          {
+            handle:
+              'apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim',
+          },
+          {
+            handle:
+              'apple-iphone-17-pro-max-256gb-deep-blue-titanium-with-facetime-international-version-dual-esim',
+          },
+        ],
+      },
+      set
+    );
+    expect(set.size).toBe(2);
+    expect(
+      set.has('apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim')
+    ).toBe(true);
+  });
+
+  it('accumulates handles from BOTH products and candidates (defensive: tools may evolve)', () => {
+    const set = new Set();
+    accumulateSurfacedHandles(
+      { products: [{ handle: 'a' }], candidates: [{ handle: 'b' }] },
+      set
+    );
+    expect(set.has('a')).toBe(true);
+    expect(set.has('b')).toBe(true);
+  });
+
+  it('end-to-end: candidate-derived URL survives postProcessReply (the bug fix in action)', () => {
+    const handle =
+      'apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim';
+    const set = new Set();
+    // Simulate the agent's tool-call loop encountering findProduct's result.
+    accumulateSurfacedHandles({ candidates: [{ handle }] }, set);
+    // Then the LLM's reply containing that URL goes through postProcessReply.
+    const text = `Confirmed — iPhone 17 Pro Max for AED 5,545.\n\nhttps://alasil.ae/products/${handle}`;
+    const result = postProcessReply({
+      rawText: text,
+      surfacedHandles: set,
+      sessionId: 'tg:test:candidate-flow',
+    });
+    expect(result).toContain(handle);
+    expect(result).not.toContain('WhatsApp');
+  });
+
+  it('handles malformed input gracefully (null result, missing arrays, non-Set surfacedHandles)', () => {
+    // Should not throw on any of these
+    expect(() => accumulateSurfacedHandles(null, new Set())).not.toThrow();
+    expect(() => accumulateSurfacedHandles({}, new Set())).not.toThrow();
+    expect(() =>
+      accumulateSurfacedHandles({ products: 'not-an-array' }, new Set())
+    ).not.toThrow();
+    // Non-Set surfacedHandles → no-op (defensive guard)
+    accumulateSurfacedHandles({ products: [{ handle: 'x' }] }, null);
+    accumulateSurfacedHandles({ products: [{ handle: 'x' }] }, []);
+    // (no assertion needed; just ensuring it doesn't throw)
+  });
+});
+
+// Issue #2 follow-up (corrections): pickProductList drives session.last_products
+// (via collectedProducts in agent.js). Pre-fix, this only checked result.products,
+// so findProduct's result.candidates never reached session.last_products, breaking
+// Issue #1's maybeSetPendingAction heuristic. The "SC#2 structurally inert"
+// finding from a17ae00 was a misdiagnosis of THIS bug.
+describe('pickProductList — picks the product list from inconsistent tool result fields', () => {
+  it('returns result.products when present (browseMenu / searchProducts / filterCatalog)', () => {
+    const list = pickProductList({
+      products: [{ handle: 'iphone-15-pro' }, { handle: 'iphone-15-plus' }],
+    });
+    expect(list).toHaveLength(2);
+    expect(list[0].handle).toBe('iphone-15-pro');
+  });
+
+  it('falls back to result.candidates when products absent (findProduct — root-cause fix)', () => {
+    const list = pickProductList({
+      step: 'candidates',
+      candidates: [
+        {
+          handle:
+            'apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim',
+        },
+      ],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0].handle).toBe(
+      'apple-iphone-17-pro-max-256gb-deep-blue-titanium-middle-east-version-dual-esim'
+    );
+  });
+
+  it('returns empty when neither field is populated (no_stock_in_category, category_unknown, etc.)', () => {
+    expect(pickProductList({})).toEqual([]);
+    expect(pickProductList({ step: 'no_stock_in_category' })).toEqual([]);
+    expect(pickProductList(null)).toEqual([]);
+    expect(pickProductList(undefined)).toEqual([]);
+  });
+
+  it('precedence: when both products and candidates are populated, products wins', () => {
+    // Defensive: this is unlikely in current tools but documents the contract.
+    // products is the canonical name; candidates is a fallback for findProduct.
+    const list = pickProductList({
+      products: [{ handle: 'from-products' }],
+      candidates: [{ handle: 'from-candidates' }],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0].handle).toBe('from-products');
+  });
+
+  it('handles empty arrays as if absent (empty products → fall back to candidates)', () => {
+    // Edge case: products: [] should NOT short-circuit before checking candidates.
+    const list = pickProductList({
+      products: [],
+      candidates: [{ handle: 'fallback-h' }],
+    });
+    expect(list).toHaveLength(1);
+    expect(list[0].handle).toBe('fallback-h');
   });
 });
